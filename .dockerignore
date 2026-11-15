@@ -1,0 +1,5 @@
+.git
+private
+*.sqlite3*
+__pycache__
+test-results
