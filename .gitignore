@@ -3,3 +3,4 @@ __pycache__/
 .env
 private/
 test-results/
+dist/
