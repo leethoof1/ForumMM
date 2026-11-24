@@ -1,0 +1,25 @@
+[Unit]
+Description=ForumMM application
+After=network.target
+
+[Service]
+Type=simple
+User=forummm
+Group=forummm
+WorkingDirectory=/opt/forummm
+Environment=FORUM_STATE_DIR=/var/lib/forummm
+Environment=FORUM_SECURE_COOKIE=1
+ExecStart=/usr/bin/python3 /opt/forummm/server.py --host 127.0.0.1 --port 8090
+Restart=on-failure
+RestartSec=3
+StateDirectory=forummm
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/forummm
+
+[Install]
+WantedBy=multi-user.target

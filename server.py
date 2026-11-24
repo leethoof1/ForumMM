@@ -1,5 +1,5 @@
 """Forum demo. Python 3.12+, no runtime dependencies."""
-import argparse, hmac, json, os, secrets, sqlite3, time
+import argparse, hashlib, json, os, secrets, sqlite3, time
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from http.cookies import SimpleCookie
@@ -19,15 +19,22 @@ def connect():
 
 def initialize():
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.umask(0o077)
     with connect() as db:
         db.executescript('''CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,balance INTEGER NOT NULL DEFAULT 0 CHECK(balance>=0));
         CREATE TABLE IF NOT EXISTS completed(session TEXT REFERENCES sessions(id),task TEXT,PRIMARY KEY(session,task));
         CREATE TABLE IF NOT EXISTS exchanges(session TEXT REFERENCES sessions(id),request TEXT,product TEXT,name TEXT,price INTEGER,created INTEGER,PRIMARY KEY(session,request));
         CREATE TABLE IF NOT EXISTS attempts(session TEXT PRIMARY KEY,window INTEGER,count INTEGER);''')
-    if not (STATE/'codes.json').exists():
-        words=['ДЕМО-'+secrets.token_hex(3).upper() for _ in catalog()['tasks']]
-        fd=os.open(STATE/'codes.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-        with os.fdopen(fd,'w') as f: json.dump(dict(zip([t['id'] for t in catalog()['tasks']],words)),f,ensure_ascii=False,indent=2)
+        db.execute("""CREATE TABLE IF NOT EXISTS redeem_codes(
+            digest TEXT PRIMARY KEY, task TEXT NOT NULL, batch TEXT NOT NULL,
+            created INTEGER NOT NULL, used_by TEXT REFERENCES sessions(id), used_at INTEGER,
+            CHECK((used_by IS NULL) = (used_at IS NULL)))""")
+        db.execute('CREATE INDEX IF NOT EXISTS codes_batch ON redeem_codes(batch)')
+    # Legacy shared words deliberately remain disabled. Existing progress is retained.
+
+def code_digest(code):
+    return hashlib.sha256(code.strip().casefold().encode('utf-8')).hexdigest()
+
 
 def progress(db,sid):
     return dict(balance=db.execute('SELECT balance FROM sessions WHERE id=?',(sid,)).fetchone()[0],completed=[r[0] for r in db.execute('SELECT task FROM completed WHERE session=?',(sid,))],history=[dict(r) for r in db.execute('SELECT request,product,name,price,created FROM exchanges WHERE session=? ORDER BY created DESC,rowid DESC',(sid,))])
@@ -83,12 +90,17 @@ class Handler(BaseHTTPRequestHandler):
                     count=row['count'] if row and now-row['window']<60 else 0
                     window=row['window'] if count else now
                     db.execute('INSERT OR REPLACE INTO attempts VALUES(?,?,?)',(sid,window,count+1))
-                    codes=json.loads((STATE/'codes.json').read_text())
                     supplied=body.get('code','')
-                    valid=isinstance(supplied,str) and task['id'] in codes and hmac.compare_digest(supplied.strip().casefold().encode(),str(codes[task['id']]).strip().casefold().encode())
+                    record=db.execute('SELECT * FROM redeem_codes WHERE digest=?',
+                        (code_digest(supplied),)).fetchone() if isinstance(supplied,str) and 0<len(supplied)<=100 else None
                     if count>=20: error='Слишком много попыток. Повтори через минуту.'; status=429
-                    elif not valid: error='Проверь написание кодового слова и попробуй ещё раз'; status=400
+                    elif not record or record['task']!=task['id']:
+                        error='Проверь код и задание. Такой код не найден для этого задания.'; status=400
+                    elif record['used_by'] is not None:
+                        error='Этот код уже использован. Получи новый код у организатора.'; status=409
                     else:
+                        db.execute('UPDATE redeem_codes SET used_by=?,used_at=? WHERE digest=? AND used_by IS NULL',
+                            (sid,now,record['digest']))
                         db.execute('INSERT INTO completed VALUES(?,?)',(sid,task['id']))
                         db.execute('UPDATE sessions SET balance=balance+? WHERE id=?',(task['reward'],sid))
             elif self.path=='/api/exchange':
@@ -110,6 +122,6 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(status,result,sid)
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(); parser.add_argument('--port',type=int,default=8000); parser.add_argument('--host',default='0.0.0.0'); args=parser.parse_args()
+    parser=argparse.ArgumentParser(); parser.add_argument('--port',type=int,default=8090); parser.add_argument('--host',default='0.0.0.0'); args=parser.parse_args()
     initialize(); print(f'ForumMM listening on port {args.port}',flush=True)
     ThreadingHTTPServer((args.host,args.port),Handler).serve_forever()

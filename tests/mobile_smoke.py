@@ -1,8 +1,9 @@
 from playwright.sync_api import sync_playwright
-import json, os
+import csv, os
 from pathlib import Path
-base=os.environ.get("FORUM_TEST_URL","http://127.0.0.1:8000")
-code=json.loads(Path(os.environ.get("FORUM_STATE_DIR",str(Path.home()/".local/share/forummm")),"codes.json").read_text())["t0"]
+base=os.environ.get("FORUM_TEST_URL","http://127.0.0.1:8090")
+with Path(os.environ['FORUM_CODES_CSV']).open(encoding='utf-8-sig') as f:
+ code=next(row['code'] for row in csv.DictReader(f) if row['task_id']=='t0')
 artifacts=Path(os.environ.get("FORUM_ARTIFACTS","/tmp/forummm-test-artifacts"));artifacts.mkdir(parents=True,exist_ok=True)
 with sync_playwright() as p:
  browser=p.chromium.launch(headless=True,executable_path='/usr/bin/chromium',args=['--no-sandbox'])
