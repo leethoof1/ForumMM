@@ -34,6 +34,8 @@ def initialize():
         columns={r['name'] for r in db.execute('PRAGMA table_info(redeem_codes)')}
         if 'max_uses' not in columns:
             db.execute('ALTER TABLE redeem_codes ADD COLUMN max_uses INTEGER NOT NULL DEFAULT 1 CHECK(max_uses>0)')
+        if 'active' not in columns:
+            db.execute('ALTER TABLE redeem_codes ADD COLUMN active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1))')
         db.execute("""CREATE TABLE IF NOT EXISTS code_uses(
             digest TEXT REFERENCES redeem_codes(digest), session TEXT REFERENCES sessions(id),
             created INTEGER NOT NULL, PRIMARY KEY(digest,session))""")
@@ -61,7 +63,7 @@ def initialize():
     # Legacy shared words deliberately remain disabled. Existing progress is retained.
 
 def code_digest(code):
-    return hashlib.sha256(code.strip().casefold().encode('utf-8')).hexdigest()
+    return hashlib.sha256(code.strip().casefold().replace('ё','е').encode('utf-8')).hexdigest()
 
 
 def progress(db,sid):
@@ -153,7 +155,7 @@ class Handler(BaseHTTPRequestHandler):
                 row=db.execute('SELECT window,count FROM attempts WHERE session=?',(sid,)).fetchone()
                 now=int(time.time()); count=row['count'] if row and now-row['window']<60 else 0
                 db.execute('INSERT OR REPLACE INTO attempts VALUES(?,?,?)',(sid,row['window'] if count else now,count+1))
-                record=db.execute("SELECT * FROM redeem_codes WHERE digest=? AND task='*'",
+                record=db.execute("SELECT * FROM redeem_codes WHERE digest=? AND task='*' AND active=1",
                     (code_digest(supplied),)).fetchone() if isinstance(supplied,str) and 0<len(supplied)<=100 else None
                 if count>=20: error='Слишком много попыток. Повтори через минуту.';status=429
                 elif not record: error='Код не найден. Проверь написание.';status=400
@@ -176,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
                     record=db.execute('SELECT * FROM redeem_codes WHERE digest=?',
                         (code_digest(supplied),)).fetchone() if isinstance(supplied,str) and 0<len(supplied)<=100 else None
                     if count>=20: error='Слишком много попыток. Повтори через минуту.'; status=429
-                    elif not record or record['task']!=task['id']:
+                    elif not record or not record['active'] or record['task']!=task['id']:
                         error='Проверь код и задание. Такой код не найден для этого задания.'; status=400
                     elif record['used_by'] is not None:
                         error='Этот код уже использован. Получи новый код у организатора.'; status=409

@@ -4,6 +4,11 @@ set -Eeuo pipefail
 [[ $(id -u) == 0 ]] || { echo 'Нужен root'; exit 1; }
 TARGET=${1:?Укажите полный SHA версии}
 CSV=${2:?Укажите путь к CSV с кодами}
+MODE=${3:-import}
+[[ $MODE == import || $MODE == replace ]] || { echo 'Режим: import или replace'; exit 1; }
+DEST=/var/lib/forummm/forum-codes.csv
+COMMAND=import-pool
+if [[ $MODE == replace ]]; then DEST=/var/lib/forummm/forum-words.csv; COMMAND=replace-pool; fi
 [[ $TARGET =~ ^[a-f0-9]{40}$ ]] || { echo 'Неверный SHA'; exit 1; }
 [[ -f $CSV ]] || { echo "Файл кодов не найден: $CSV"; exit 1; }
 APP=/opt/forummm
@@ -24,14 +29,14 @@ with sqlite3.connect('/var/lib/forummm/progress.sqlite3') as source, sqlite3.con
 PY
 git -C "$APP" checkout --detach "$TARGET"
 # Copy the private print file, never put it in the repository or web root.
-if [[ $(readlink -f "$CSV") != /var/lib/forummm/forum-codes.csv ]]; then
-    if [[ -e /var/lib/forummm/forum-codes.csv ]]; then
-        cmp "$CSV" /var/lib/forummm/forum-codes.csv || { echo 'Другой файл кодов уже существует. Нужна ручная проверка.'; false; }
+if [[ $(readlink -f "$CSV") != "$DEST" ]]; then
+    if [[ -e "$DEST" ]]; then
+        cmp "$CSV" "$DEST" || { echo 'Другой файл кодов уже существует. Нужна ручная проверка.'; false; }
     else
-        install -o forummm -g forummm -m 600 "$CSV" /var/lib/forummm/forum-codes.csv
+        install -o forummm -g forummm -m 600 "$CSV" "$DEST"
     fi
 fi
-runuser -u forummm -- env FORUM_STATE_DIR=/var/lib/forummm python3 "$APP/tools/manage_codes.py" import-pool /var/lib/forummm/forum-codes.csv
+runuser -u forummm -- env FORUM_STATE_DIR=/var/lib/forummm python3 "$APP/tools/manage_codes.py" "$COMMAND" "$DEST"
 systemctl start forummm
 python3 - <<'PY'
 import urllib.request,json,time

@@ -71,10 +71,12 @@ def pool(output):
             db.rollback();output.unlink(missing_ok=True);raise
     print(f'Партия {batch}: 100 кодов, 5300 начислений. CSV: {output}')
 
-def import_pool(source):
+def import_pool(source, replace=False):
     with Path(source).open(encoding='utf-8-sig') as f: rows=list(csv.DictReader(f))
-    if len(rows)!=100 or len({r['code'].strip().casefold() for r in rows})!=100:
+    if len(rows)!=100 or len({server.code_digest(r['code']) for r in rows})!=100:
         raise ValueError('Ожидается 100 уникальных кодов')
+    if len({r['batch'] for r in rows})!=1 or any(not r['code'].strip() or len(r['code'])>100 for r in rows):
+        raise ValueError('Ожидается одна партия с непустыми кодами до 100 символов')
     from collections import Counter
     if Counter(int(r['max_uses']) for r in rows)!={600:5,100:15,10:80}:
         raise ValueError('Ожидаются лимиты: 5×600, 15×100, 80×10')
@@ -86,6 +88,9 @@ def import_pool(source):
                 if old['task']!='*' or old['batch']!=r['batch'] or old['max_uses']!=int(r['max_uses']):
                     raise ValueError('Конфликт кода с существующей партией')
             else: db.execute("INSERT INTO redeem_codes(digest,task,batch,created,max_uses) VALUES(?,'*',?,?,?)",(digest,r['batch'],int(time.time()),int(r['max_uses'])))
+        if replace:
+            db.execute("UPDATE redeem_codes SET active=0 WHERE batch<>?",(rows[0]['batch'],))
+            db.execute("UPDATE redeem_codes SET active=1 WHERE task='*' AND batch=?",(rows[0]['batch'],))
     print('100 кодов импортированы. Повторный импорт сохраняет погашения.')
 
 def main():
@@ -95,12 +100,14 @@ def main():
     g.add_argument('--task',action='append');g.add_argument('--output',required=True)
     g=sub.add_parser('pool');g.add_argument('--output',required=True)
     g=sub.add_parser('import-pool');g.add_argument('source')
+    g=sub.add_parser('replace-pool');g.add_argument('source')
     sub.add_parser('stats')
     args=parser.parse_args();server.initialize()
     if args.action=='generate':
         generate(args.per_task,args.task or [t['id'] for t in server.catalog()['tasks']],args.output)
     elif args.action=='pool': pool(args.output)
     elif args.action=='import-pool': import_pool(args.source)
+    elif args.action=='replace-pool': import_pool(args.source,replace=True)
     else:
         with server.connect() as db:
             for row in db.execute('SELECT batch,task,count(*) AS total,(SELECT count(*) FROM code_uses u JOIN redeem_codes c ON c.digest=u.digest WHERE c.batch=redeem_codes.batch AND c.task=redeem_codes.task) AS used FROM redeem_codes GROUP BY batch,task'):

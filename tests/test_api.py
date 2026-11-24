@@ -161,4 +161,25 @@ class API(unittest.TestCase):
   secret=(pathlib.Path(self.tmp.name)/'delivery-code.txt').read_text()
   self.assertEqual(self.request('receive',{'receipt':receipt,'confirmation':secret})[0],429)
   self.assertIsNone(self.request('state')[1]['history'][0]['fulfilled_at'])
+ def test_pool_replace_keeps_balance_and_disables_old(self):
+  import csv
+  old=pathlib.Path(self.tmp.name)/('old-'+os.urandom(4).hex()+'.csv')
+  new=pathlib.Path(self.tmp.name)/('new-'+os.urandom(4).hex()+'.csv')
+  for path in [old,new]:
+   r=subprocess.run(['python3','tools/manage_codes.py','pool','--output',str(path)],cwd=ROOT,env=self.env,capture_output=True)
+   self.assertEqual(r.returncode,0,r.stderr)
+  with old.open(encoding='utf-8-sig') as f:oldcode=next(csv.DictReader(f))['code']
+  with new.open(encoding='utf-8-sig') as f:newcode=next(csv.DictReader(f))['code']
+  self.request('redeem',{'code':oldcode})
+  for _ in range(2):
+   r=subprocess.run(['python3','tools/manage_codes.py','replace-pool',str(new)],cwd=ROOT,env=self.env,capture_output=True)
+   self.assertEqual(r.returncode,0,r.stderr)
+  self.assertEqual(self.request('state')[1]['balance'],1)
+  self.assertEqual(self.request('redeem',{'code':oldcode},cookie=self.new_cookie())[0],400)
+  self.assertEqual(self.request('redeem',{'code':newcode})[1]['balance'],2)
+  self.assertEqual(self.request('redeem',{'code':newcode})[1]['balance'],2)
+ def test_code_normalization_cyrillic(self):
+  import importlib.util
+  spec=importlib.util.spec_from_file_location('forum_server',ROOT/'server.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+  self.assertEqual(module.code_digest('  УЧЁБА '),module.code_digest('учеба'))
 if __name__=='__main__':unittest.main()
