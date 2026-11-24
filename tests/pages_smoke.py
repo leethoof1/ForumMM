@@ -22,7 +22,7 @@ with sync_playwright() as p:
  assert page.locator('.balance b').inner_text()=='1';assert page.locator('.historyrow').count()==1
  page.locator('[data-product="shirt"]').click();page.get_by_role('button',name='Подтвердить обмен').click();page.locator('.error').filter(has_text='Нужно ещё 6').wait_for();page.get_by_role('button',name='Отмена').click()
  page.reload();page.get_by_role('heading',name='Магазин мерча').wait_for();assert page.locator('.balance b').inner_text()=='0';assert page.locator('.historyrow').count()==0
- page.locator('nav a[href="#tasks"]').click();page.get_by_role('heading',name='Впечатления в баллах').wait_for();assert page.locator('.done').count()==0;assert page.locator('[data-task]').count()==10
+ page.locator('nav a[href="#tasks"]').click();page.get_by_role('heading',name='Впечатления в баллах').wait_for();assert page.locator('.done').count()==0;assert page.locator('[data-task]').count()==17
  assert not page.context.cookies();assert not api_requests;assert not errors,errors
  assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
  page.screenshot(path='/tmp/forum-pages-mobile.png',full_page=True)

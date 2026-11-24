@@ -47,18 +47,63 @@ def generate(count, task_ids, output):
     print(f'Партия {batch}: создано {count*len(task_ids)} кодов. CSV: {output}')
 
 
+def pool(output):
+    output=Path(output).resolve()
+    if output.is_relative_to(server.ROOT.resolve()):
+        raise ValueError('CSV должен находиться вне репозитория')
+    output.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    batch=secrets.token_hex(8)
+    with server.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        fd=os.open(output,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        try:
+            with os.fdopen(fd,'w',encoding='utf-8-sig',newline='') as f:
+                w=csv.writer(f);w.writerow(['number','code','max_uses','batch'])
+                i=0
+                for amount,limit in [(5,600),(15,100),(80,10)]:
+                    for _ in range(amount):
+                        i+=1;code='MM-'+secrets.token_hex(8).upper()
+                        db.execute("INSERT INTO redeem_codes(digest,task,batch,created,max_uses) VALUES(?,'*',?,?,?)",(server.code_digest(code),batch,int(time.time()),limit))
+                        w.writerow([i,code,limit,batch])
+                f.flush();os.fsync(f.fileno())
+            db.commit()
+        except BaseException:
+            db.rollback();output.unlink(missing_ok=True);raise
+    print(f'Партия {batch}: 100 кодов, 5300 начислений. CSV: {output}')
+
+def import_pool(source):
+    with Path(source).open(encoding='utf-8-sig') as f: rows=list(csv.DictReader(f))
+    if len(rows)!=100 or len({r['code'].strip().casefold() for r in rows})!=100:
+        raise ValueError('Ожидается 100 уникальных кодов')
+    from collections import Counter
+    if Counter(int(r['max_uses']) for r in rows)!={600:5,100:15,10:80}:
+        raise ValueError('Ожидаются лимиты: 5×600, 15×100, 80×10')
+    with server.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        for r in rows:
+            digest=server.code_digest(r['code']);old=db.execute('SELECT * FROM redeem_codes WHERE digest=?',(digest,)).fetchone()
+            if old:
+                if old['task']!='*' or old['batch']!=r['batch'] or old['max_uses']!=int(r['max_uses']):
+                    raise ValueError('Конфликт кода с существующей партией')
+            else: db.execute("INSERT INTO redeem_codes(digest,task,batch,created,max_uses) VALUES(?,'*',?,?,?)",(digest,r['batch'],int(time.time()),int(r['max_uses'])))
+    print('100 кодов импортированы. Повторный импорт сохраняет погашения.')
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     sub=parser.add_subparsers(dest='action',required=True)
     g=sub.add_parser('generate');g.add_argument('--per-task',type=int,required=True)
     g.add_argument('--task',action='append');g.add_argument('--output',required=True)
+    g=sub.add_parser('pool');g.add_argument('--output',required=True)
+    g=sub.add_parser('import-pool');g.add_argument('source')
     sub.add_parser('stats')
     args=parser.parse_args();server.initialize()
     if args.action=='generate':
         generate(args.per_task,args.task or [t['id'] for t in server.catalog()['tasks']],args.output)
+    elif args.action=='pool': pool(args.output)
+    elif args.action=='import-pool': import_pool(args.source)
     else:
         with server.connect() as db:
-            for row in db.execute('SELECT batch,task,count(*) AS total,sum(used_by IS NOT NULL) AS used FROM redeem_codes GROUP BY batch,task'):
+            for row in db.execute('SELECT batch,task,count(*) AS total,(SELECT count(*) FROM code_uses u JOIN redeem_codes c ON c.digest=u.digest WHERE c.batch=redeem_codes.batch AND c.task=redeem_codes.task) AS used FROM redeem_codes GROUP BY batch,task'):
                 print(f"{row['batch']} / {row['task']}: использовано {row['used']} из {row['total']}")
 
 if __name__=='__main__':

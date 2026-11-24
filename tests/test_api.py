@@ -37,8 +37,8 @@ class API(unittest.TestCase):
    db.execute('INSERT INTO redeem_codes(digest,task,batch,created) VALUES(?,?,?,?)',(hashlib.sha256(code.strip().casefold().encode()).hexdigest(),task,'test',int(time.time())))
  def new_cookie(self):
   r=urllib.request.urlopen('http://127.0.0.1:8011/api/state');return r.headers['Set-Cookie'].split(';')[0]
- def request(self,path,body=None,cookie=None):
-  req=urllib.request.Request('http://127.0.0.1:8011/api/'+path,data=json.dumps(body).encode() if body else None,headers={'Cookie':cookie or self.cookie,'X-Forum-Request':'1','Content-Type':'application/json'})
+ def request(self,path,body=None,cookie=None,staff=False):
+  req=urllib.request.Request('http://127.0.0.1:8011/api/'+path,data=json.dumps(body).encode() if body else None,headers={'Cookie':cookie or self.cookie,'X-Forum-Request':'1','Content-Type':'application/json',**({'X-Staff-Key':(pathlib.Path(self.tmp.name)/'staff-key.txt').read_text().strip()} if staff else {})})
   try:r=urllib.request.urlopen(req)
   except urllib.error.HTTPError as e:r=e
   return r.status,json.load(r)
@@ -102,4 +102,43 @@ class API(unittest.TestCase):
   for _ in range(20):self.complete('wrong')
   self.assertEqual(self.complete()[0],429)
   self.assertEqual(self.complete(cookie=self.new_cookie())[0],200)
+ def test_pool_capacity_concurrency_and_repeat(self):
+  with sqlite3.connect(pathlib.Path(self.tmp.name)/'progress.sqlite3') as db:
+   db.execute("UPDATE redeem_codes SET task='*',max_uses=3 WHERE digest=?",(hashlib.sha256(self.code.casefold().encode()).hexdigest(),))
+  cookies=[self.new_cookie() for _ in range(12)]
+  with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+   results=list(pool.map(lambda c:self.request('redeem',{'code':self.code},cookie=c),cookies))
+  self.assertEqual(sum(status==200 for status,_ in results),3)
+  winner=cookies[next(i for i,r in enumerate(results) if r[0]==200)]
+  result=self.request('redeem',{'code':self.code},cookie=winner)
+  self.assertEqual(result[0],200);self.assertEqual(result[1]['balance'],1)
+  self.assertEqual(result[1]['redeemed'],1)
+  self.assertEqual(self.request('redeem',{'code':self.code},cookie=self.new_cookie())[0],409)
+ def test_pool_generation_and_repeat_import(self):
+  import csv,collections
+  out=pathlib.Path(self.tmp.name)/('pool-'+os.urandom(5).hex()+'.csv')
+  result=subprocess.run(['python3','tools/manage_codes.py','pool','--output',str(out)],cwd=ROOT,env=self.env,capture_output=True)
+  self.assertEqual(result.returncode,0,result.stderr)
+  with out.open(encoding='utf-8-sig') as f: rows=list(csv.DictReader(f))
+  self.assertEqual(collections.Counter(int(r['max_uses']) for r in rows),{600:5,100:15,10:80})
+  self.assertEqual(len({r['code'] for r in rows}),100)
+  self.request('redeem',{'code':rows[0]['code']})
+  for _ in range(2):
+   result=subprocess.run(['python3','tools/manage_codes.py','import-pool',str(out)],cwd=ROOT,env=self.env,capture_output=True)
+   self.assertEqual(result.returncode,0,result.stderr)
+  self.assertEqual(self.request('redeem',{'code':rows[0]['code']})[1]['balance'],1)
+ def test_staff_fulfillment_auth_idempotency(self):
+  self.complete()
+  self.request('exchange',{'product':'sticker','request':'claim-request'})
+  h=self.request('state')[1]['history'][0];receipt=h['receipt']
+  self.assertIsNone(h['fulfilled_at'])
+  self.assertEqual(self.request('staff/fulfill',{'receipt':receipt})[0],403)
+  self.assertEqual(self.request('staff/lookup',{'receipt':receipt},staff=True)[0],200)
+  with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+   results=list(pool.map(lambda _:self.request('staff/fulfill',{'receipt':receipt},staff=True),range(6)))
+  self.assertEqual(sum(not d['already_fulfilled'] for _,d in results),1)
+  self.assertTrue(all(d['exchange']['fulfilled_at'] for _,d in results))
+  state=self.request('state')[1]
+  self.assertTrue(state['history'][0]['fulfilled_at']);self.assertEqual(state['balance'],0)
+  self.assertNotIn('staff-key',json.dumps(state))
 if __name__=='__main__':unittest.main()
