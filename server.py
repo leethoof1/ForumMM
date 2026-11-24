@@ -1,4 +1,4 @@
-"""Forum demo. Python 3.12+, no runtime dependencies."""
+"""Forum application. Python 3.12+, no runtime dependencies."""
 import argparse, hashlib, hmac, json, os, secrets, sqlite3, time
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -24,7 +24,8 @@ def initialize():
         db.executescript('''CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,balance INTEGER NOT NULL DEFAULT 0 CHECK(balance>=0));
         CREATE TABLE IF NOT EXISTS completed(session TEXT REFERENCES sessions(id),task TEXT,PRIMARY KEY(session,task));
         CREATE TABLE IF NOT EXISTS exchanges(session TEXT REFERENCES sessions(id),request TEXT,product TEXT,name TEXT,price INTEGER,created INTEGER,PRIMARY KEY(session,request));
-        CREATE TABLE IF NOT EXISTS attempts(session TEXT PRIMARY KEY,window INTEGER,count INTEGER);''')
+        CREATE TABLE IF NOT EXISTS attempts(session TEXT PRIMARY KEY,window INTEGER,count INTEGER);
+        CREATE TABLE IF NOT EXISTS delivery_attempts(session TEXT PRIMARY KEY,window INTEGER,count INTEGER);''')
         db.execute("""CREATE TABLE IF NOT EXISTS redeem_codes(
             digest TEXT PRIMARY KEY, task TEXT NOT NULL, batch TEXT NOT NULL,
             created INTEGER NOT NULL, used_by TEXT REFERENCES sessions(id), used_at INTEGER,
@@ -50,6 +51,12 @@ def initialize():
         try:
             fd=os.open(keyfile,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
             with os.fdopen(fd,'w') as f: f.write(secrets.token_urlsafe(32))
+        except FileExistsError: pass
+    deliveryfile=STATE/'delivery-code.txt'
+    if not deliveryfile.exists():
+        try:
+            fd=os.open(deliveryfile,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+            with os.fdopen(fd,'w') as f: f.write('ВЫДАНО-'+secrets.token_hex(4).upper())
         except FileExistsError: pass
     # Legacy shared words deliberately remain disabled. Existing progress is retained.
 
@@ -119,7 +126,29 @@ class Handler(BaseHTTPRequestHandler):
             sid=self.session(db)
             db.execute('BEGIN IMMEDIATE')
             data=catalog(); error=None; status=200
-            if self.path=='/api/redeem':
+            if self.path=='/api/receive':
+                now=int(time.time())
+                attempts=db.execute('SELECT window,count FROM delivery_attempts WHERE session=?',(sid,)).fetchone()
+                count=attempts['count'] if attempts and now-attempts['window']<60 else 0
+                if count>=5:
+                    error='Слишком много попыток. Подожди минуту.';status=429
+                else:
+                    confirmation=body.get('confirmation','')
+                    valid=isinstance(confirmation,str) and len(confirmation)<=200 and hmac.compare_digest(
+                        confirmation.strip().casefold().encode(),(STATE/'delivery-code.txt').read_text().strip().casefold().encode())
+                    receipt=body.get('receipt','')
+                    row=db.execute('SELECT receipt,fulfilled_at FROM exchanges WHERE session=? AND receipt=?',
+                        (sid,receipt.strip().upper())).fetchone() if isinstance(receipt,str) else None
+                    if not valid:
+                        db.execute('INSERT OR REPLACE INTO delivery_attempts VALUES(?,?,?)',(sid,attempts['window'] if count else now,count+1))
+                        error='Неверный код организатора.';status=403
+                    elif not row:
+                        error='Обмен не найден в истории этого участника.';status=404
+                    else:
+                        db.execute('UPDATE exchanges SET fulfilled_at=? WHERE session=? AND receipt=? AND fulfilled_at IS NULL',
+                            (now,sid,row['receipt']))
+                        db.execute('DELETE FROM delivery_attempts WHERE session=?',(sid,))
+            elif self.path=='/api/redeem':
                 supplied=body.get('code','')
                 row=db.execute('SELECT window,count FROM attempts WHERE session=?',(sid,)).fetchone()
                 now=int(time.time()); count=row['count'] if row and now-row['window']<60 else 0

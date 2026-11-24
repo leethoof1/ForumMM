@@ -1,11 +1,12 @@
-"""Build the browser-only demo; never package server state or real code words."""
+"""Build the GitHub Pages link to the live forum (no second balance database)."""
 from pathlib import Path
 import shutil
 root=Path(__file__).resolve().parents[1]
-out=root/'dist';out.mkdir(exist_ok=True)
-for name in ('index.html','app.js','style.css','logo.svg','district.svg'):
- shutil.copyfile(root/'public'/name,out/name)
-p=out/'index.html';p.write_text(p.read_text().replace('<body>','<body data-mode="browser">'))
-shutil.copyfile(root/'data.json',out/'data.json')
+out=root/'dist'
+if out.exists(): shutil.rmtree(out)
+(out/'public').mkdir(parents=True)
+shutil.copyfile(root/'index.html',out/'index.html')
+for name in ['style.css','logo.svg','district.svg']:
+ shutil.copyfile(root/'public'/name,out/'public'/name)
 (out/'.nojekyll').touch()
-print('Built dist/: browser demo, progress resets on reload')
+print('Pages landing built: links to the live forum')

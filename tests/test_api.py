@@ -141,4 +141,24 @@ class API(unittest.TestCase):
   state=self.request('state')[1]
   self.assertTrue(state['history'][0]['fulfilled_at']);self.assertEqual(state['balance'],0)
   self.assertNotIn('staff-key',json.dumps(state))
+ def test_phone_delivery_owner_auth_and_concurrency(self):
+  self.complete();self.request('exchange',{'product':'sticker','request':'phone-delivery'})
+  receipt=self.request('state')[1]['history'][0]['receipt']
+  secret=(pathlib.Path(self.tmp.name)/'delivery-code.txt').read_text()
+  self.assertEqual(self.request('receive',{'receipt':receipt,'confirmation':'wrong'})[0],403)
+  self.assertEqual(self.request('receive',{'receipt':receipt,'confirmation':secret},cookie=self.new_cookie())[0],404)
+  self.assertIsNone(self.request('state')[1]['history'][0]['fulfilled_at'])
+  with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+   results=list(pool.map(lambda _:self.request('receive',{'receipt':receipt,'confirmation':' '+secret.lower()+' '}),range(6)))
+  self.assertTrue(all(status==200 for status,_ in results))
+  self.assertEqual(len({r['history'][0]['fulfilled_at'] for _,r in results}),1)
+  d=self.request('state')[1];self.assertEqual(d['balance'],0);self.assertTrue(d['history'][0]['fulfilled_at'])
+  self.assertNotIn(secret,json.dumps(d,ensure_ascii=False))
+ def test_phone_delivery_throttle(self):
+  self.complete();self.request('exchange',{'product':'sticker','request':'phone-delivery-throttle'})
+  receipt=self.request('state')[1]['history'][0]['receipt']
+  for _ in range(5):self.assertEqual(self.request('receive',{'receipt':receipt,'confirmation':'wrong'})[0],403)
+  secret=(pathlib.Path(self.tmp.name)/'delivery-code.txt').read_text()
+  self.assertEqual(self.request('receive',{'receipt':receipt,'confirmation':secret})[0],429)
+  self.assertIsNone(self.request('state')[1]['history'][0]['fulfilled_at'])
 if __name__=='__main__':unittest.main()

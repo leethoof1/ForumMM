@@ -39,7 +39,8 @@ opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
 for i in range(15):
     try:
         d=json.load(opener.open('http://127.0.0.1:8090/api/state',timeout=3))
-        assert len(d['data']['unity_points'])==7
+        assert len(d['data']['venues'])==6
+        assert not any(e['id']=='volunteer-contest' for e in d['data']['events'])
         assert 'redeemed' in d
         break
     except (OSError,AssertionError):
@@ -49,5 +50,5 @@ print('Новая программа и база кодов: OK')
 PY
 trap - ERR
 echo "Обновлено. Бэкап БД: $BACKUP"
-echo 'Страница организаторов: /staff. Ключ только для сотрудников: /var/lib/forummm/staff-key.txt'
+echo 'Выдача: организатор вводит код на телефоне участника. Закрытый код: /var/lib/forummm/delivery-code.txt (не присылайте в чат).'
 echo 'Обязательно HTTPS до выдачи настоящего мерча. Баллы и история сохранены.'
