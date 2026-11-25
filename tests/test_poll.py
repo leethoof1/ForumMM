@@ -9,7 +9,7 @@ class Poll(unittest.TestCase):
   for _ in range(100):
    try:urllib.request.urlopen('http://127.0.0.1:8013/api/state');break
    except OSError:time.sleep(.05)
-  links=json.loads((cls.state/'poll-links.json').read_text());cls.tokens={k:v.split('#')[1] for k,v in links.items()}
+  links=json.loads((cls.state/'poll-links.json').read_text());cls.tokens={k:(v.split('#',1)[1] if '#' in v else '') for k,v in links.items()}
  @classmethod
  def tearDownClass(cls):cls.proc.terminate();cls.proc.wait();cls.tmp.cleanup()
  def req(self,endpoint,role='vote',cookie='',**body):
@@ -34,7 +34,8 @@ class Poll(unittest.TestCase):
   for action,role in [('results','vote'),('manage','vote'),('manage','results'),('view','control')]:
    self.assertEqual(self.req(action,role=role)[0],403)
   d=self.req('view')[1]
-  for value in self.tokens.values():self.assertNotIn(value,json.dumps(d))
+  for value in self.tokens.values():
+   if value:self.assertNotIn(value,json.dumps(d))
  def test_parallel_repeat_one_vote(self):
   self.req('manage',role='control',action='open');_,_,c=self.req('view')
   with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:

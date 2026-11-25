@@ -29,7 +29,20 @@ git -C "$APP" cat-file -e "$TARGET^{commit}"
 OLD=$(git -C "$APP" rev-parse HEAD)
 BACKUP=/var/lib/forummm/backup-$(date -u +%Y%m%dT%H%M%SZ)-$$.sqlite3
 systemctl stop forummm
-trap 'git -C "$APP" checkout --detach "$OLD"; systemctl start forummm; echo "Обновление остановлено. Предыдущая версия: $OLD. Бэкап БД: $BACKUP" >&2' ERR
+rollback() {
+    FAILURE=$?
+    trap - ERR
+    git -C "$APP" checkout --detach "$OLD"
+    if [[ -n ${POLL_PROXY_BACKUP:-} && -f $POLL_PROXY_BACKUP ]]; then
+        cp -p "$POLL_PROXY_BACKUP" /etc/nginx/sites-available/forummm
+        nginx -t && systemctl reload nginx
+    fi
+    # start is a no-op if the failed new build is already running; restart is required.
+    systemctl restart forummm
+    echo "Обновление остановлено. Предыдущая версия: $OLD. Бэкап БД: $BACKUP" >&2
+    exit "$FAILURE"
+}
+trap rollback ERR
 python3 - "$BACKUP" <<'PY'
 import sqlite3,sys,os
 os.umask(0o077)
@@ -64,25 +77,18 @@ if ! nginx -t; then cp -p "$POLL_PROXY_BACKUP" /etc/nginx/sites-available/forumm
 systemctl daemon-reload
 systemctl start forummm
 systemctl reload nginx
-python3 - <<'PY'
-import urllib.request,json,time
-opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
-for i in range(15):
-    try:
-        d=json.load(opener.open('http://127.0.0.1:8090/api/state',timeout=3))
-        assert len(d['data']['venues'])==6
-        assert not any(e['id']=='volunteer-contest' for e in d['data']['events'])
-        assert 'redeemed' in d
-        assert d['data']['products'][0]['id']=='kit'
-        assert d['shop']['kit']['stock']['total']==700
-        break
-    except (OSError,AssertionError):
-        if i==14:raise
-        time.sleep(1)
-print('Новая программа и база кодов: OK')
-PY
+python3 "$APP/tools/check_readiness.py"
 trap - ERR
 echo "Обновлено. Бэкап БД: $BACKUP"
 echo 'Выдача: организатор вводит код на телефоне участника. Закрытый код: /var/lib/forummm/delivery-code.txt (не присылайте в чат).'
 echo 'Закрытые ссылки голосования: /var/lib/forummm/poll-links.json — не присылайте их в чат.'
 echo 'Обязательно HTTPS до выдачи настоящего мерча. Баллы и история сохранены.'
+
+python3 - <<'PY'
+import json
+from pathlib import Path
+links=json.loads(Path('/var/lib/forummm/poll-links.json').read_text())
+print('Участникам: '+links['vote'])
+print('На экран: '+links['results'])
+print('Ведущему (не публиковать): '+links['control'])
+PY

@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).parent
 STATE = Path(os.environ.get('FORUM_STATE_DIR', str(Path.home()/'.local/share/forummm')))
 
+BUILD_ID=hashlib.sha256(Path(__file__).read_bytes()+(ROOT/'polls.py').read_bytes()).hexdigest()
+
 def catalog():
     return json.loads(Path(os.environ.get('FORUM_CATALOG_PATH',str(ROOT/'data.json'))).read_text())
 
@@ -145,14 +147,17 @@ class Handler(BaseHTTPRequestHandler):
         return hmac.new((STATE/'ip-key.txt').read_bytes(),addr.compressed.encode(),hashlib.sha256).hexdigest()
     def do_GET(self):
         path=urlsplit(self.path).path
+        if path=='/api/health':
+            self.reply(200,{'status':'ok','build':BUILD_ID});return
         if path=='/api/state':
             with connect() as db:
                 sid=self.session(db); self.reply(200,dict(data=public_catalog(),**progress(db,sid,self.identity())),sid)
             return
-        files={'/':'index.html','/vote':'vote.html','/results':'results.html','/poll-admin':'poll-admin.html','/poll.js':'poll.js','/staff':'staff.html','/staff.js':'staff.js','/app.js':'app.js','/style.css':'style.css','/logo.png':'logo.png','/logo.svg':'logo.svg','/district.svg':'district.svg'}
+        files={'/':'index.html','/vote':'vote.html','/results':'results.html','/poll-admin':'poll-admin.html','/control':'poll-admin.html','/poll.js':'poll.js','/staff':'staff.html','/staff.js':'staff.js','/app.js':'app.js','/style.css':'style.css','/logo.png':'logo.png','/logo.svg':'logo.svg','/district.svg':'district.svg'}
         file=ROOT/'public'/files.get(path,'missing')
         if not file.is_file(): self.send_error(404); return
         raw=file.read_bytes(); self.send_response(200); self.headers_common()
+        self.send_header('Cache-Control','no-cache')
         self.send_header('Content-Type',{'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8','png':'image/png','svg':'image/svg+xml'}[file.suffix[1:]])
         self.send_header('Content-Length',str(len(raw))); self.end_headers(); self.wfile.write(raw)
     def do_POST(self):

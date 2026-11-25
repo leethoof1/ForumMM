@@ -1,6 +1,7 @@
 """Unlisted live poll. Tokens are URL fragments, not request URLs or access-log entries."""
 import base64
 import hmac
+import hashlib
 import io
 import json
 import os
@@ -24,12 +25,19 @@ def initialize(db,state):
        ('plenary',QUESTION,json.dumps(OPTIONS,ensure_ascii=False),secrets.token_urlsafe(24),secrets.token_urlsafe(24),secrets.token_urlsafe(32)))
     db.commit()
     row=db.execute("SELECT voter,screen,control FROM live_polls WHERE id='plenary'").fetchone()
-    base=os.environ.get('FORUM_PUBLIC_URL','https://mm2026.ru').rstrip('/')
-    links=dict(vote=base+'/vote#'+row['voter'],results=base+'/results#'+row['screen'],control=base+'/poll-admin#'+row['control'])
+    links=links_for(row)
     path=state/'poll-links.json'
     # A private copy for the owner. Never exposed by the static-file handler.
     fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
     with os.fdopen(fd,'w') as f:json.dump(links,f,ensure_ascii=False,indent=2)
+
+def short_key(role,token):
+    return hashlib.sha256((role+':'+token).encode()).hexdigest()[:16]
+
+def links_for(row):
+    base=os.environ.get('FORUM_PUBLIC_URL','https://mm2026.ru').rstrip('/')
+    return dict(vote=base+'/vote',results=base+'/results#'+short_key('screen',row['screen']),
+                control=base+'/control#'+short_key('control',row['control']))
 
 def view(db,row,sid=None):
     choice=None
@@ -48,10 +56,14 @@ def handle(handler,body,connect):
     action=handler.path.rsplit('/',1)[-1]
     role={'view':'voter','vote':'voter','results':'screen','qr':'screen','manage':'control'}.get(action)
     token=body.get('token','')
-    if not role or not isinstance(token,str) or not 16<=len(token)<=128:
+    if not role or not isinstance(token,str) or (token and not 16<=len(token)<=128) or (not token and role!='voter'):
         handler.reply(403,{'error':'Ссылка неполная или недействительна.'});return
     with connect() as db:
-        row=db.execute('SELECT * FROM live_polls WHERE '+role+'=?',(token,)).fetchone()
+        row=db.execute('SELECT * FROM live_polls WHERE '+role+'=?',(token,)).fetchone() if token else None
+        if not row:
+            candidate=db.execute("SELECT * FROM live_polls WHERE id='plenary'").fetchone()
+            if candidate and ((role=='voter' and not token) or hmac.compare_digest(token.encode(),short_key(role,candidate[role]).encode())):
+                row=candidate
         if not row:handler.reply(403,{'error':'Ссылка недействительна.'});return
         if action=='results':handler.reply(200,tally(db,row));return
         if action=='qr':
@@ -60,7 +72,7 @@ def handle(handler,body,connect):
                 from qrcode.image.svg import SvgPathImage
             except ImportError:
                 handler.reply(503,{'error':'На сервере требуется пакет python3-qrcode.'});return
-            url=os.environ.get('FORUM_PUBLIC_URL','https://mm2026.ru').rstrip('/')+'/vote#'+row['voter']
+            url=links_for(row)['vote']
             image=qrcode.make(url,image_factory=SvgPathImage,border=4);output=io.BytesIO();image.save(output)
             handler.reply(200,{'image':'data:image/svg+xml;base64,'+base64.b64encode(output.getvalue()).decode(),'url':url});return
         if action=='manage':
@@ -75,7 +87,8 @@ def handle(handler,body,connect):
             elif command in ['open','close']:
                 db.execute('UPDATE live_polls SET opened=? WHERE id=?',(int(command=='open'),row['id']))
             db.commit();row=db.execute('SELECT * FROM live_polls WHERE id=?',(row['id'],)).fetchone()
-            handler.reply(200,tally(db,row));return
+            result=tally(db,row);result['links']=links_for(row)
+            handler.reply(200,result);return
         sid=handler.session(db)
         if action=='view':handler.reply(200,view(db,row,sid),sid);return
         choice=body.get('choice')

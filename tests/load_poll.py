@@ -6,7 +6,7 @@ import aiohttp
 BASE=os.environ.get('FORUM_TEST_URL','http://127.0.0.1:8101').rstrip('/')
 assert urlsplit(BASE).hostname in ['127.0.0.1','localhost'],'Use a separate loopback test server'
 STATE=Path(os.environ['FORUM_STATE_DIR'])
-links=json.loads((STATE/'poll-links.json').read_text());tokens={k:v.split('#')[1] for k,v in links.items()}
+links=json.loads((STATE/'poll-links.json').read_text());tokens={k:(v.split('#',1)[1] if '#' in v else '') for k,v in links.items()}
 async def main():
  async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=0),cookie_jar=aiohttp.DummyCookieJar(),timeout=aiohttp.ClientTimeout(total=60)) as client:
   async def post(endpoint,role='vote',cookie='',**body):
