@@ -24,7 +24,7 @@ class Shop(unittest.TestCase):
  def client(self,ip):
   req=urllib.request.Request('http://127.0.0.1:8012/api/state',headers={'X-Real-IP':ip})
   r=urllib.request.urlopen(req);cookie=r.headers['Set-Cookie'].split(';')[0]
-  with self.db() as db:db.execute('UPDATE sessions SET balance=6 WHERE id=?',(cookie.split('=')[1],))
+  with self.db() as db:db.execute('UPDATE sessions SET balance=10 WHERE id=?',(cookie.split('=')[1],))
   return ip,cookie
  def req(self,client,path='state',body=None):
   req=urllib.request.Request('http://127.0.0.1:8012/api/'+path,data=json.dumps(body).encode() if body else None,headers={'X-Forum-Request':'1','X-Real-IP':client[0],'Cookie':client[1],'Content-Type':'application/json'})
@@ -54,12 +54,12 @@ class Shop(unittest.TestCase):
   self.assertEqual(self.buy(('198.51.100.99',first[1]),'changed-ip-request')[0],409)
   second=self.client(first[0]);self.assertEqual(self.buy(second,'another-request')[0],409)
   self.assertTrue(self.req(second)[1]['shop']['kit']['purchased'])
-  self.assertEqual(self.req(second)[1]['balance'],6)
+  self.assertEqual(self.req(second)[1]['balance'],10)
  def test_code_cannot_repeat_in_other_browser_same_ip(self):
   with self.db() as db:db.execute("INSERT INTO redeem_codes(digest,task,batch,created,max_uses) VALUES(?,'*','test',0,600)",(server.code_digest('ПРИМЕР'),))
   first=self.client('198.51.100.30');second=self.client(first[0]);other=self.client('198.51.100.31')
   self.assertEqual(self.req(first,'redeem',{'code':'пример'})[0],200)
-  self.assertEqual(self.req(first,'redeem',{'code':'пример'})[1]['balance'],7)
+  self.assertEqual(self.req(first,'redeem',{'code':'пример'})[1]['balance'],11)
   self.assertEqual(self.req(second,'redeem',{'code':'пример'})[0],409)
   self.assertEqual(self.req(other,'redeem',{'code':'пример'})[0],200)
   with self.db() as db:
@@ -73,9 +73,9 @@ class Shop(unittest.TestCase):
  def test_stock_rejection_does_not_charge(self):
   clients=[self.client('203.0.113.'+str(i)) for i in range(2)]
   with self.db() as db:
-   for i in range(2):db.execute('INSERT INTO exchanges(session,request,product,name,price,created,receipt) VALUES(?,?,?,?,?,?,?)',(clients[i][1].split('=')[1],str(i),'kit','kit',6,0,'receipt-'+str(i)))
+   for i in range(2):db.execute('INSERT INTO exchanges(session,request,product,name,price,created,receipt) VALUES(?,?,?,?,?,?,?)',(clients[i][1].split('=')[1],str(i),'kit','kit',10,0,'receipt-'+str(i)))
   c=self.client('203.0.113.10');status,d=self.buy(c,'out-of-stock')
-  self.assertEqual(status,409);self.assertEqual(d['balance'],6);self.assertEqual(len(d['history']),0)
+  self.assertEqual(status,409);self.assertEqual(d['balance'],10);self.assertEqual(len(d['history']),0)
  def test_untrusted_client_cannot_spoof_ip_header(self):
   from unittest.mock import patch
   handler=server.Handler.__new__(server.Handler)
