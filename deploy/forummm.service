@@ -9,6 +9,8 @@ Group=forummm
 WorkingDirectory=/opt/forummm
 Environment=FORUM_STATE_DIR=/var/lib/forummm
 Environment=FORUM_SECURE_COOKIE=1
+Environment=FORUM_TRUST_PROXY=1
+Environment=FORUM_IP_GUARD=1
 ExecStart=/usr/bin/python3 /opt/forummm/server.py --host 127.0.0.1 --port 8090
 Restart=on-failure
 RestartSec=3

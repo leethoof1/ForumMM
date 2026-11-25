@@ -3,11 +3,13 @@
 set -Eeuo pipefail
 [[ $(id -u) == 0 ]] || { echo 'Нужен root'; exit 1; }
 TARGET=${1:?Укажите полный SHA версии}
-CSV=${2:?Укажите путь к CSV с кодами}
+CSV=${2:-/var/lib/forummm/forum-words.csv}
+if [[ -z ${2:-} && ! -f $CSV ]]; then CSV=/var/lib/forummm/forum-codes.csv; fi
 MODE=${3:-import}
 [[ $MODE == import || $MODE == replace ]] || { echo 'Режим: import или replace'; exit 1; }
 DEST=/var/lib/forummm/forum-codes.csv
 COMMAND=import-pool
+if [[ $(readlink -f "$CSV") == /var/lib/forummm/forum-words.csv ]]; then DEST=/var/lib/forummm/forum-words.csv; fi
 if [[ $MODE == replace ]]; then DEST=/var/lib/forummm/forum-words.csv; COMMAND=replace-pool; fi
 [[ $TARGET =~ ^[a-f0-9]{40}$ ]] || { echo 'Неверный SHA'; exit 1; }
 [[ -f $CSV ]] || { echo "Файл кодов не найден: $CSV"; exit 1; }
@@ -37,6 +39,14 @@ if [[ $(readlink -f "$CSV") != "$DEST" ]]; then
     fi
 fi
 runuser -u forummm -- env FORUM_STATE_DIR=/var/lib/forummm python3 "$APP/tools/manage_codes.py" "$COMMAND" "$DEST"
+# The loopback backend trusts X-Real-IP only from local nginx.
+grep -Eq 'proxy_set_header[[:space:]]+X-Real-IP[[:space:]]+\$remote_addr;' /etc/nginx/sites-available/forummm || { echo 'Нужен X-Real-IP от nginx'; false; }
+install -d -m 755 /etc/systemd/system/forummm.service.d
+if [[ ! -f /etc/systemd/system/forummm.service.d/ip-guard.conf ]]; then
+    printf '[Service]\nEnvironment=FORUM_TRUST_PROXY=1\nEnvironment=FORUM_IP_GUARD=1\n' > /etc/systemd/system/forummm.service.d/ip-guard.conf
+fi
+grep -qx 'Environment=FORUM_TRUST_PROXY=1' /etc/systemd/system/forummm.service.d/ip-guard.conf || { echo 'Проверьте доверенный proxy в ip-guard.conf'; false; }
+systemctl daemon-reload
 systemctl start forummm
 python3 - <<'PY'
 import urllib.request,json,time
@@ -47,6 +57,8 @@ for i in range(15):
         assert len(d['data']['venues'])==6
         assert not any(e['id']=='volunteer-contest' for e in d['data']['events'])
         assert 'redeemed' in d
+        assert d['data']['products'][0]['id']=='kit'
+        assert d['shop']['kit']['stock']['total']==700
         break
     except (OSError,AssertionError):
         if i==14:raise

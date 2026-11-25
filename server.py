@@ -1,4 +1,6 @@
 """Forum application. Python 3.12+, no runtime dependencies."""
+import ipaddress
+from datetime import datetime, timezone
 import argparse, hashlib, hmac, json, os, secrets, sqlite3, time
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -9,7 +11,7 @@ ROOT = Path(__file__).parent
 STATE = Path(os.environ.get('FORUM_STATE_DIR', str(Path.home()/'.local/share/forummm')))
 
 def catalog():
-    return json.loads((ROOT/'data.json').read_text())
+    return json.loads(Path(os.environ.get('FORUM_CATALOG_PATH',str(ROOT/'data.json'))).read_text())
 
 def connect():
     db = sqlite3.connect(STATE/'progress.sqlite3', timeout=20)
@@ -25,7 +27,11 @@ def initialize():
         CREATE TABLE IF NOT EXISTS completed(session TEXT REFERENCES sessions(id),task TEXT,PRIMARY KEY(session,task));
         CREATE TABLE IF NOT EXISTS exchanges(session TEXT REFERENCES sessions(id),request TEXT,product TEXT,name TEXT,price INTEGER,created INTEGER,PRIMARY KEY(session,request));
         CREATE TABLE IF NOT EXISTS attempts(session TEXT PRIMARY KEY,window INTEGER,count INTEGER);
-        CREATE TABLE IF NOT EXISTS delivery_attempts(session TEXT PRIMARY KEY,window INTEGER,count INTEGER);''')
+        CREATE TABLE IF NOT EXISTS delivery_attempts(session TEXT PRIMARY KEY,window INTEGER,count INTEGER);
+        CREATE TABLE IF NOT EXISTS ip_codes(ip TEXT,digest TEXT,session TEXT,created INTEGER,PRIMARY KEY(ip,digest));
+        CREATE TABLE IF NOT EXISTS session_products(session TEXT,product TEXT,PRIMARY KEY(session,product));
+        CREATE TABLE IF NOT EXISTS ip_products(ip TEXT,product TEXT,session TEXT,PRIMARY KEY(ip,product));
+        CREATE TABLE IF NOT EXISTS ip_attempts(ip TEXT PRIMARY KEY,window INTEGER,count INTEGER);''')
         db.execute("""CREATE TABLE IF NOT EXISTS redeem_codes(
             digest TEXT PRIMARY KEY, task TEXT NOT NULL, batch TEXT NOT NULL,
             created INTEGER NOT NULL, used_by TEXT REFERENCES sessions(id), used_at INTEGER,
@@ -48,6 +54,7 @@ def initialize():
         for row in db.execute('SELECT rowid FROM exchanges WHERE receipt IS NULL').fetchall():
             db.execute('UPDATE exchanges SET receipt=? WHERE rowid=?',(secrets.token_hex(8).upper(),row['rowid']))
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS exchange_receipt ON exchanges(receipt)')
+        db.execute('INSERT OR IGNORE INTO session_products SELECT session,product FROM exchanges')
     keyfile=STATE/'staff-key.txt'
     if not keyfile.exists():
         try:
@@ -60,14 +67,44 @@ def initialize():
             fd=os.open(deliveryfile,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
             with os.fdopen(fd,'w') as f: f.write('ВЫДАНО-'+secrets.token_hex(4).upper())
         except FileExistsError: pass
+    ipkey=STATE/'ip-key.txt'
+    if not ipkey.exists():
+        try:
+            fd=os.open(ipkey,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+            with os.fdopen(fd,'w') as f:f.write(secrets.token_hex(32))
+        except FileExistsError:pass
     # Legacy shared words deliberately remain disabled. Existing progress is retained.
 
 def code_digest(code):
     return hashlib.sha256(code.strip().casefold().replace('ё','е').encode('utf-8')).hexdigest()
 
 
-def progress(db,sid):
-    return dict(balance=db.execute('SELECT balance FROM sessions WHERE id=?',(sid,)).fetchone()[0],completed=[r[0] for r in db.execute('SELECT task FROM completed WHERE session=?',(sid,))],redeemed=db.execute('SELECT count(*) FROM code_uses WHERE session=?',(sid,)).fetchone()[0],history=[dict(r) for r in db.execute('SELECT request,product,name,price,created,receipt,fulfilled_at FROM exchanges WHERE session=? ORDER BY created DESC,rowid DESC',(sid,))])
+def ip_guard():
+    return os.environ.get('FORUM_IP_GUARD','1')=='1'
+
+def inventory(db,product,now=None):
+    config=product.get('stock')
+    if not config:return None
+    now=now or datetime.now(timezone.utc)
+    total=int(config['total']);initial=int(config['initial'])
+    release=datetime.fromisoformat(config['release_at'])
+    cap=total if now>=release else initial
+    row=db.execute('SELECT count(*),sum(fulfilled_at IS NOT NULL) FROM exchanges WHERE product=?',(product['id'],)).fetchone()
+    allocated=row[0];issued=row[1] or 0
+    return dict(total=total,released=cap,available=max(0,cap-allocated),reserved=allocated-issued,
+                issued=issued,remaining=max(0,total-issued),release_at=config['release_at'],upcoming=max(0,total-cap))
+
+def shop_data(db,sid,ip):
+    result={}
+    for p in catalog()['products']:
+        bought=db.execute('SELECT 1 FROM session_products WHERE session=? AND product=?',(sid,p['id'])).fetchone()
+        blocked=ip_guard() and db.execute('SELECT 1 FROM ip_products WHERE ip=? AND product=?',(ip,p['id'])).fetchone()
+        result[p['id']]=dict(purchased=bool(bought or blocked),stock=inventory(db,p))
+    return result
+
+def progress(db,sid,ip=""):
+    shop=shop_data(db,sid,ip)
+    return dict(shop=shop,balance=db.execute('SELECT balance FROM sessions WHERE id=?',(sid,)).fetchone()[0],completed=[r[0] for r in db.execute('SELECT task FROM completed WHERE session=?',(sid,))],redeemed=db.execute('SELECT count(*) FROM code_uses WHERE session=?',(sid,)).fetchone()[0],history=[dict(r) for r in db.execute('SELECT request,product,name,price,created,receipt,fulfilled_at FROM exchanges WHERE session=? ORDER BY created DESC,rowid DESC',(sid,))])
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args): pass # Never log request bodies or code words.
@@ -88,11 +125,19 @@ class Handler(BaseHTTPRequestHandler):
         if len(sid)!=64 or not db.execute('SELECT 1 FROM sessions WHERE id=?',(sid,)).fetchone():
             sid=secrets.token_hex(32); db.execute('INSERT INTO sessions(id) VALUES(?)',(sid,)); db.commit()
         return sid
+    def identity(self):
+        peer=ipaddress.ip_address(self.client_address[0])
+        addr=peer
+        if os.environ.get('FORUM_TRUST_PROXY','0')=='1' and peer.is_loopback:
+            try:addr=ipaddress.ip_address(self.headers.get('X-Real-IP',''))
+            except ValueError:pass
+        if isinstance(addr,ipaddress.IPv6Address) and addr.ipv4_mapped:addr=addr.ipv4_mapped
+        return hmac.new((STATE/'ip-key.txt').read_bytes(),addr.compressed.encode(),hashlib.sha256).hexdigest()
     def do_GET(self):
         path=urlsplit(self.path).path
         if path=='/api/state':
             with connect() as db:
-                sid=self.session(db); self.reply(200,dict(data=catalog(),**progress(db,sid)),sid)
+                sid=self.session(db); self.reply(200,dict(data=catalog(),**progress(db,sid,self.identity())),sid)
             return
         files={'/':'index.html','/staff':'staff.html','/staff.js':'staff.js','/app.js':'app.js','/style.css':'style.css','/logo.png':'logo.png','/logo.svg':'logo.svg','/district.svg':'district.svg'}
         file=ROOT/'public'/files.get(path,'missing')
@@ -127,6 +172,7 @@ class Handler(BaseHTTPRequestHandler):
         with connect() as db:
             sid=self.session(db)
             db.execute('BEGIN IMMEDIATE')
+            ip=self.identity()
             data=catalog(); error=None; status=200
             if self.path=='/api/receive':
                 now=int(time.time())
@@ -157,13 +203,19 @@ class Handler(BaseHTTPRequestHandler):
                 db.execute('INSERT OR REPLACE INTO attempts VALUES(?,?,?)',(sid,row['window'] if count else now,count+1))
                 record=db.execute("SELECT * FROM redeem_codes WHERE digest=? AND task='*' AND active=1",
                     (code_digest(supplied),)).fetchone() if isinstance(supplied,str) and 0<len(supplied)<=100 else None
-                if count>=20: error='Слишком много попыток. Повтори через минуту.';status=429
+                iprow=db.execute('SELECT window,count FROM ip_attempts WHERE ip=?',(ip,)).fetchone()
+                ipcount=iprow['count'] if iprow and now-iprow['window']<60 else 0
+                if ip_guard():db.execute('INSERT OR REPLACE INTO ip_attempts VALUES(?,?,?)',(ip,iprow['window'] if ipcount else now,ipcount+1))
+                if count>=20 or (ip_guard() and ipcount>=60): error='Слишком много попыток. Повтори через минуту.';status=429
                 elif not record: error='Код не найден. Проверь написание.';status=400
                 elif db.execute('SELECT 1 FROM code_uses WHERE digest=? AND session=?',(record['digest'],sid)).fetchone():
-                    pass # Idempotent retry: already credited to this browser.
+                    if ip_guard():db.execute('INSERT OR IGNORE INTO ip_codes VALUES(?,?,?,?)',(ip,record['digest'],sid,now))
+                elif ip_guard() and db.execute('SELECT 1 FROM ip_codes WHERE ip=? AND digest=?',(ip,record['digest'])).fetchone():
+                    error='С этого IP-адреса этот код уже применяли.';status=409
                 elif db.execute('SELECT count(*) FROM code_uses WHERE digest=?',(record['digest'],)).fetchone()[0]>=record['max_uses']:
                     error='Лимит использований этого кода исчерпан.';status=409
                 else:
+                    if ip_guard():db.execute('INSERT INTO ip_codes VALUES(?,?,?,?)',(ip,record['digest'],sid,now))
                     db.execute('INSERT INTO code_uses VALUES(?,?,?)',(record['digest'],sid,now))
                     db.execute('UPDATE sessions SET balance=balance+1 WHERE id=?',(sid,))
             elif self.path=='/api/complete':
@@ -180,11 +232,14 @@ class Handler(BaseHTTPRequestHandler):
                     if count>=20: error='Слишком много попыток. Повтори через минуту.'; status=429
                     elif not record or not record['active'] or record['task']!=task['id']:
                         error='Проверь код и задание. Такой код не найден для этого задания.'; status=400
+                    elif ip_guard() and db.execute('SELECT 1 FROM ip_codes WHERE ip=? AND digest=?',(ip,record['digest'])).fetchone():
+                        error='С этого IP-адреса этот код уже применяли.';status=409
                     elif record['used_by'] is not None:
                         error='Этот код уже использован. Получи новый код у организатора.'; status=409
                     else:
                         db.execute('UPDATE redeem_codes SET used_by=?,used_at=? WHERE digest=? AND used_by IS NULL',
                             (sid,now,record['digest']))
+                        if ip_guard():db.execute('INSERT INTO ip_codes VALUES(?,?,?,?)',(ip,record['digest'],sid,now))
                         db.execute('INSERT INTO code_uses VALUES(?,?,?)',(record['digest'],sid,now))
                         db.execute('INSERT INTO completed VALUES(?,?)',(sid,task['id']))
                         db.execute('UPDATE sessions SET balance=balance+? WHERE id=?',(task['reward'],sid))
@@ -195,14 +250,23 @@ class Handler(BaseHTTPRequestHandler):
                 elif previous:
                     if previous['product']!=body.get('product'): error='Этот запрос уже использован'; status=409
                 elif not product: error='Товар не найден'; status=404
+                elif db.execute('SELECT 1 FROM session_products WHERE session=? AND product=?',(sid,product['id'])).fetchone():
+                    error='Ты уже обменял баллы на этот товар. Повторный обмен недоступен.';status=409
+                elif ip_guard() and db.execute('SELECT 1 FROM ip_products WHERE ip=? AND product=?',(ip,product['id'])).fetchone():
+                    error='С этого IP-адреса этот товар уже приобретали.';status=409
                 else:
                     balance=progress(db,sid)['balance']
-                    if balance<product['price']: error=f"Нужно ещё {product['price']-balance} балл(ов)"; status=409
+                    stock=inventory(db,product)
+                    if stock and stock['available']<=0:
+                        error='Доступные сейчас наборы закончились.';status=409
+                    elif balance<product['price']: error=f"Нужно ещё {product['price']-balance} балл(ов)"; status=409
                     else:
+                        db.execute('INSERT INTO session_products VALUES(?,?)',(sid,product['id']))
+                        if ip_guard():db.execute('INSERT INTO ip_products VALUES(?,?,?)',(ip,product['id'],sid))
                         db.execute('UPDATE sessions SET balance=balance-? WHERE id=?',(product['price'],sid))
                         db.execute('INSERT INTO exchanges(session,request,product,name,price,created,receipt) VALUES(?,?,?,?,?,?,?)',(sid,key,product['id'],product['name'],product['price'],int(time.time()),secrets.token_hex(8).upper()))
             else: error='Не найдено'; status=404
-            db.commit(); result=progress(db,sid)
+            db.commit(); result=progress(db,sid,ip)
             if error: result['error']=error
             self.reply(status,result,sid)
 

@@ -16,7 +16,10 @@ class API(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
   cls.tmp=tempfile.TemporaryDirectory()
-  cls.env={**os.environ,'FORUM_STATE_DIR':cls.tmp.name,'FORUM_SECURE_COOKIE':'0'}
+  fixture=json.loads((ROOT/'data.json').read_text())
+  fixture['products']=[dict(id='sticker',name='Наклейка',price=1),dict(id='shirt',name='Футболка',price=7)]
+  path=pathlib.Path(cls.tmp.name)/'catalog.json';path.write_text(json.dumps(fixture))
+  cls.env={**os.environ,'FORUM_STATE_DIR':cls.tmp.name,'FORUM_SECURE_COOKIE':'0','FORUM_IP_GUARD':'0','FORUM_CATALOG_PATH':str(path)}
   cls.start_server()
  @classmethod
  def start_server(cls):
