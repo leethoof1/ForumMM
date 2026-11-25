@@ -1,4 +1,6 @@
 """Forum application. Python 3.12+, no runtime dependencies."""
+import polls
+from concurrent.futures import ThreadPoolExecutor
 import ipaddress
 from datetime import datetime, timezone
 import argparse, hashlib, hmac, json, os, secrets, sqlite3, time
@@ -12,6 +14,11 @@ STATE = Path(os.environ.get('FORUM_STATE_DIR', str(Path.home()/'.local/share/for
 
 def catalog():
     return json.loads(Path(os.environ.get('FORUM_CATALOG_PATH',str(ROOT/'data.json'))).read_text())
+
+def public_catalog():
+    data=catalog()
+    for product in data['products']: product.pop('stock',None)
+    return data
 
 def connect():
     db = sqlite3.connect(STATE/'progress.sqlite3', timeout=20)
@@ -73,6 +80,9 @@ def initialize():
             fd=os.open(ipkey,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
             with os.fdopen(fd,'w') as f:f.write(secrets.token_hex(32))
         except FileExistsError:pass
+    with connect() as db:
+        db.execute('PRAGMA journal_mode=WAL')
+        polls.initialize(db,STATE)
     # Legacy shared words deliberately remain disabled. Existing progress is retained.
 
 def code_digest(code):
@@ -91,8 +101,8 @@ def inventory(db,product,now=None):
     cap=total if now>=release else initial
     row=db.execute('SELECT count(*),sum(fulfilled_at IS NOT NULL) FROM exchanges WHERE product=?',(product['id'],)).fetchone()
     allocated=row[0];issued=row[1] or 0
-    return dict(total=total,released=cap,available=max(0,cap-allocated),reserved=allocated-issued,
-                issued=issued,remaining=max(0,total-issued),release_at=config['release_at'],upcoming=max(0,total-cap))
+    return dict(total=cap,released=cap,available=max(0,cap-allocated),reserved=allocated-issued,
+                issued=issued,remaining=max(0,cap-issued))
 
 def shop_data(db,sid,ip):
     result={}
@@ -137,9 +147,9 @@ class Handler(BaseHTTPRequestHandler):
         path=urlsplit(self.path).path
         if path=='/api/state':
             with connect() as db:
-                sid=self.session(db); self.reply(200,dict(data=catalog(),**progress(db,sid,self.identity())),sid)
+                sid=self.session(db); self.reply(200,dict(data=public_catalog(),**progress(db,sid,self.identity())),sid)
             return
-        files={'/':'index.html','/staff':'staff.html','/staff.js':'staff.js','/app.js':'app.js','/style.css':'style.css','/logo.png':'logo.png','/logo.svg':'logo.svg','/district.svg':'district.svg'}
+        files={'/':'index.html','/vote':'vote.html','/results':'results.html','/poll-admin':'poll-admin.html','/poll.js':'poll.js','/staff':'staff.html','/staff.js':'staff.js','/app.js':'app.js','/style.css':'style.css','/logo.png':'logo.png','/logo.svg':'logo.svg','/district.svg':'district.svg'}
         file=ROOT/'public'/files.get(path,'missing')
         if not file.is_file(): self.send_error(404); return
         raw=file.read_bytes(); self.send_response(200); self.headers_common()
@@ -153,6 +163,8 @@ class Handler(BaseHTTPRequestHandler):
             body=json.loads(self.rfile.read(n))
             if not isinstance(body,dict): raise ValueError()
         except (ValueError,TypeError): self.reply(400,{'error':'Некорректный запрос'}); return
+        if self.path.startswith('/api/poll/'):
+            polls.handle(self,body,connect);return
         if self.path in ['/api/staff/lookup','/api/staff/fulfill']:
             key=self.headers.get('X-Staff-Key','')
             if not hmac.compare_digest(key.encode(),(STATE/'staff-key.txt').read_text().strip().encode()):
@@ -270,7 +282,18 @@ class Handler(BaseHTTPRequestHandler):
             if error: result['error']=error
             self.reply(status,result,sid)
 
+class ForumServer(ThreadingHTTPServer):
+    request_queue_size=1024
+    def __init__(self,*args,**kwargs):
+        self.pool=ThreadPoolExecutor(max_workers=32)
+        super().__init__(*args,**kwargs)
+    def process_request(self,request,client_address):
+        self.pool.submit(self.process_request_thread,request,client_address)
+    def server_close(self):
+        super().server_close()
+        self.pool.shutdown(wait=True)
+
 if __name__=='__main__':
     parser=argparse.ArgumentParser(); parser.add_argument('--port',type=int,default=8090); parser.add_argument('--host',default='0.0.0.0'); args=parser.parse_args()
     initialize(); print(f'ForumMM listening on port {args.port}',flush=True)
-    ThreadingHTTPServer((args.host,args.port),Handler).serve_forever()
+    ForumServer((args.host,args.port),Handler).serve_forever()

@@ -6,6 +6,8 @@ TARGET=${1:?Укажите полный SHA версии}
 CSV=${2:-/var/lib/forummm/forum-words.csv}
 if [[ -z ${2:-} && ! -f $CSV ]]; then CSV=/var/lib/forummm/forum-codes.csv; fi
 MODE=${3:-import}
+RESET=${4:-}
+[[ -z $RESET || $RESET == reset ]] || { echo 'Четвёртый аргумент: reset или пусто'; exit 1; }
 [[ $MODE == import || $MODE == replace ]] || { echo 'Режим: import или replace'; exit 1; }
 DEST=/var/lib/forummm/forum-codes.csv
 COMMAND=import-pool
@@ -13,6 +15,12 @@ if [[ $(readlink -f "$CSV") == /var/lib/forummm/forum-words.csv ]]; then DEST=/v
 if [[ $MODE == replace ]]; then DEST=/var/lib/forummm/forum-words.csv; COMMAND=replace-pool; fi
 [[ $TARGET =~ ^[a-f0-9]{40}$ ]] || { echo 'Неверный SHA'; exit 1; }
 [[ -f $CSV ]] || { echo "Файл кодов не найден: $CSV"; exit 1; }
+# QR rendering is required on the presentation screen.
+if ! python3 -c 'import qrcode' >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y python3-qrcode
+fi
 APP=/opt/forummm
 [[ -z $(git -C "$APP" status --porcelain) ]] || { echo 'В приложении есть изменения, обновление остановлено'; exit 1; }
 # Fetch and validate before stopping the site.
@@ -46,8 +54,16 @@ if [[ ! -f /etc/systemd/system/forummm.service.d/ip-guard.conf ]]; then
     printf '[Service]\nEnvironment=FORUM_TRUST_PROXY=1\nEnvironment=FORUM_IP_GUARD=1\n' > /etc/systemd/system/forummm.service.d/ip-guard.conf
 fi
 grep -qx 'Environment=FORUM_TRUST_PROXY=1' /etc/systemd/system/forummm.service.d/ip-guard.conf || { echo 'Проверьте доверенный proxy в ip-guard.conf'; false; }
+if [[ $RESET == reset ]]; then
+    runuser -u forummm -- env FORUM_STATE_DIR=/var/lib/forummm python3 "$APP/tools/reset_progress.py" --confirm RESET-PROGRESS
+fi
+POLL_PROXY_BACKUP=/etc/nginx/sites-available/forummm.before-poll-$(date -u +%Y%m%dT%H%M%SZ)-$$
+cp -p /etc/nginx/sites-available/forummm "$POLL_PROXY_BACKUP"
+python3 "$APP/tools/configure_poll_proxy.py" /etc/nginx/sites-available/forummm
+if ! nginx -t; then cp -p "$POLL_PROXY_BACKUP" /etc/nginx/sites-available/forummm; false; fi
 systemctl daemon-reload
 systemctl start forummm
+systemctl reload nginx
 python3 - <<'PY'
 import urllib.request,json,time
 opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -68,4 +84,5 @@ PY
 trap - ERR
 echo "Обновлено. Бэкап БД: $BACKUP"
 echo 'Выдача: организатор вводит код на телефоне участника. Закрытый код: /var/lib/forummm/delivery-code.txt (не присылайте в чат).'
+echo 'Закрытые ссылки голосования: /var/lib/forummm/poll-links.json — не присылайте их в чат.'
 echo 'Обязательно HTTPS до выдачи настоящего мерча. Баллы и история сохранены.'

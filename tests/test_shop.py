@@ -39,11 +39,11 @@ class Shop(unittest.TestCase):
   self.assertEqual(sum(s==200 for s,_ in results),2)
   idx=next(i for i,r in enumerate(results) if r[0]==200);winner=clients[idx]
   state=self.req(winner)[1];stock=state['shop']['kit']['stock']
-  self.assertEqual((stock['available'],stock['reserved'],stock['remaining']),(0,2,3))
+  self.assertEqual((stock['available'],stock['reserved'],stock['remaining']),(0,2,2))
   receipt=state['history'][0]['receipt'];secret=(self.state/'delivery-code.txt').read_text()
   status,data=self.req(winner,'receive',dict(receipt=receipt,confirmation=secret))
   self.assertEqual(status,200);stock=data['shop']['kit']['stock']
-  self.assertEqual((stock['issued'],stock['remaining'],stock['reserved'],stock['available']),(1,2,1,0))
+  self.assertEqual((stock['issued'],stock['remaining'],stock['reserved'],stock['available']),(1,1,1,0))
   with self.db() as db:
    after=server.inventory(db,self.product,datetime.fromisoformat('2030-11-27T14:30:00+03:00'))
   self.assertEqual(after['available'],1)
@@ -85,4 +85,26 @@ class Shop(unittest.TestCase):
    a=handler.identity();handler.headers={'X-Real-IP':'198.51.100.2'};self.assertEqual(a,handler.identity())
    handler.client_address=('127.0.0.1',12345)
    b=handler.identity();handler.headers={'X-Real-IP':'198.51.100.3'};self.assertNotEqual(b,handler.identity())
+ def test_reset_clears_purchase_ip_usage_and_restores_stock(self):
+  c=self.client('198.51.100.70');self.assertEqual(self.buy(c,'reset-purchase')[0],200)
+  with self.db() as db:
+   db.execute("INSERT INTO redeem_codes(digest,task,batch,created,max_uses) VALUES(?,'*','reset',0,600)",(server.code_digest('СБРОС'),))
+  self.assertEqual(self.req(c,'redeem',{'code':'СБРОС'})[0],200)
+  result=subprocess.run(['python3','tools/reset_progress.py','--confirm','RESET-PROGRESS'],cwd=ROOT,env=self.env,capture_output=True)
+  self.assertEqual(result.returncode,0,result.stderr)
+  d=self.req(c)[1]
+  self.assertEqual(d['balance'],0);self.assertEqual(d['history'],[])
+  self.assertFalse(d['shop']['kit']['purchased']);self.assertEqual(d['shop']['kit']['stock']['available'],2)
+  self.assertEqual(d['shop']['kit']['stock']['total'],2)
+  self.assertNotIn('release_at',d['shop']['kit']['stock'])
+  self.assertNotIn('stock',d['data']['products'][0])
+  self.assertEqual(self.req(c,'redeem',{'code':'СБРОС'})[0],200)
+ def test_real_catalog_release_is_at_1400_and_future_is_hidden(self):
+  product=json.loads((ROOT/'data.json').read_text())['products'][0]
+  with self.db() as db:
+   before=server.inventory(db,product,datetime.fromisoformat('2026-11-27T13:59:59+03:00'))
+   after=server.inventory(db,product,datetime.fromisoformat('2026-11-27T14:00:00+03:00'))
+  self.assertEqual((before['total'],before['remaining'],before['available']),(500,500,500))
+  self.assertEqual((after['total'],after['remaining'],after['available']),(700,700,700))
+  self.assertNotIn('release_at',before);self.assertNotIn('upcoming',before)
 if __name__=='__main__':unittest.main()

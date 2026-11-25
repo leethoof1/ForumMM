@@ -13,10 +13,11 @@ with sync_playwright() as p:
  assert page.locator('[data-filter="main"]').get_attribute('aria-pressed')=='true'
  assert page.locator('[data-filter="all"]').count()==0
  assert page.locator('[data-task]').count()==0
- assert page.locator('[data-filter]').last.bounding_box()['y']<400
+ assert page.locator('.hero').bounding_box()['y']<page.locator('.filters').bounding_box()['y']<page.locator('.next').bounding_box()['y']
  assert page.locator('#demo').count()==0
  assert 'Демоверсия' not in page.locator('body').inner_text()
  page.locator('[data-filter="unity"]').click();assert page.locator('.event').count()==2
+ assert 'Росмолодёжь' in page.locator('.next').inner_text()
  page.locator('[data-filter="volunteer"]').click();assert 'Кабинет 202' in page.locator('.schedule').inner_text()
  assert 'Банкетный зал' not in page.locator('.schedule').inner_text()
  page.locator('[data-filter="main"]').click();assert page.locator('.event').count()==8

@@ -23,7 +23,7 @@ if [[ -e "$APP" ]]; then
 fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y python3 git nginx ca-certificates
+apt-get install -y python3 git nginx ca-certificates python3-qrcode
 if [[ ! -e "$APP" ]]; then
   git clone https://github.com/leethoof1/ForumMM.git "$APP"
   git -C "$APP" checkout --detach "$COMMIT"
