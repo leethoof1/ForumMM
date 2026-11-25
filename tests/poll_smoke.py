@@ -21,9 +21,40 @@ with sync_playwright() as p:
  screen=b.new_page(viewport={'width':1440,'height':900});screen.on('pageerror',lambda e:errors.append(str(e)))
  screen.goto(base+'/results#'+tokens['results']);screen.locator('.poll-total').filter(has_text='1').wait_for();screen.locator('#poll-qr img').wait_for();screen.wait_for_timeout(200)
  assert screen.locator('#poll-qr img').evaluate('(img)=>img.complete&&img.naturalWidth>0')
- assert len(screen.locator('.poll-results .card').all())==2
+ assert screen.locator('.poll-comparison').count()==1
+ assert screen.locator('.poll-shared-bar').count()==1
+ assert screen.locator('[data-count=adults]').inner_text()=='1'
+ assert screen.locator('[data-percent=adults]').inner_text()=='100%'
+ screen.evaluate("window.originalResults = document.querySelector('.poll-comparison'); window.originalQr = document.querySelector('#poll-qr img')")
+ c2=b.new_context();other=c2.new_page();other.goto(base+'/vote')
+ other.locator('[data-choice=youth]').click();other.get_by_role('heading',name='Твой голос учтён!').wait_for()
+ screen.locator('#poll-total-count').filter(has_text='2').wait_for()
+ assert screen.locator('[data-percent=adults]').inner_text()=='50%'
+ assert screen.locator('[data-percent=youth]').inner_text()=='50%'
+ assert screen.locator('[data-count=youth]').inner_text()=='1'
+ assert screen.locator('#poll-red').get_attribute('width')=='500'
+ assert screen.locator('#poll-blue').get_attribute('width')=='500'
+ assert screen.evaluate("window.originalResults === document.querySelector('.poll-comparison') && window.originalQr === document.querySelector('#poll-qr img')")
+ assert screen.locator('.poll-comparison').evaluate('(el)=>el.getAnimations({subtree:true}).length')==0
  blank=b.new_page();blank.goto(base+'/results');blank.get_by_text('Открой полную ссылку',exact=False).wait_for();assert blank.locator('.poll-count').count()==0
  assert not errors,errors
+ for _ in range(6):
+  extra=b.new_context()
+  assert extra.request.post(base+'/api/poll/view',headers={'X-Forum-Request':'1'},data={'token':''}).ok
+  assert extra.request.post(base+'/api/poll/vote',headers={'X-Forum-Request':'1'},data={'token':'','choice':'youth'}).ok
+  extra.close()
+ screen.locator('#poll-total-count').filter(has_text='8').wait_for()
+ assert screen.locator('[data-percent=adults]').inner_text()=='12,5%'
+ assert screen.locator('[data-percent=youth]').inner_text()=='87,5%'
+ assert screen.locator('#poll-red').get_attribute('width')=='125'
+ assert screen.locator('#poll-blue').get_attribute('width')=='875'
+ screen.locator('.poll-comparison').screenshot(path='/workspace/forummm-artifacts/poll-shared-bar.png')
  screen.screenshot(path='/tmp/forummm-poll-screen.png',full_page=True)
+ assert api('manage',{'token':tokens['control'],'action':'reset','confirm':'RESET-POLL'}).ok
+ screen.locator('#poll-total-count').filter(has_text='0').wait_for()
+ assert screen.locator('[data-percent=adults]').inner_text()=='0%'
+ assert screen.locator('#poll-red').get_attribute('width')=='0'
+ assert screen.locator('#poll-blue').get_attribute('width')=='0'
+ assert screen.evaluate("window.originalResults === document.querySelector('.poll-comparison')")
  admin.get_by_role('button',name='Закрыть голосование',exact=True).click();admin.get_by_text('Голосование закрыто',exact=True).wait_for()
  b.close();print('PASS: control open/close, mobile voting, immutable vote, reload, QR, live results, token-free access denied')

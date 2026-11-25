@@ -21,7 +21,8 @@ def check(base='http://127.0.0.1:8090'):
     expected=hashlib.sha256((ROOT/'server.py').read_bytes()+(ROOT/'polls.py').read_bytes()).hexdigest()
     health=json.loads(get('/api/health'));assert health['build']==expected,'Запущена другая версия сервера'
     validate_state(json.loads(get('/api/state')))
-    assert get('/app.js')==(ROOT/'public/app.js').read_bytes(),'Отдаются старые файлы интерфейса'
+    for filename in ['app.js','poll.js','style.css']:
+        assert get('/'+filename)==(ROOT/'public'/filename).read_bytes(),'Отдаётся старый файл интерфейса: '+filename
     for path,role in [('/vote','vote'),('/results','results'),('/control','control')]:
         assert ('data-poll-role="'+role+'"').encode() in get(path),path+' не готов'
     print('Текущая версия, обе стадии остатков, страницы голосования и интерфейс: OK')
