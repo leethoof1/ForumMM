@@ -95,6 +95,25 @@ def import_pool(source, replace=False):
             db.execute("UPDATE redeem_codes SET active=1 WHERE task='*' AND batch=?",(rows[0]['batch'],))
     print('100 кодов импортированы. Повторный импорт сохраняет погашения.')
 
+def import_partners(source):
+    with Path(source).open(encoding='utf-8-sig') as f:rows=list(csv.DictReader(f))
+    if len(rows)!=10 or len({server.code_digest(r['code']) for r in rows})!=10:
+        raise ValueError('Ожидаются 10 уникальных партнёрских слов')
+    if len({r['batch'] for r in rows})!=1 or any(int(r['max_uses'])!=20 or not r['code'].strip() or len(r['code'])>100 for r in rows):
+        raise ValueError('Все 10 слов должны быть одной партией с лимитом 20')
+    with server.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        for row in rows:
+            digest=server.code_digest(row['code'])
+            old=db.execute('SELECT * FROM redeem_codes WHERE digest=?',(digest,)).fetchone()
+            if old:
+                if old['task']!='*' or old['max_uses']!=20 or old['batch']!=row['batch']:
+                    raise ValueError('Партнёрское слово совпадает с другой партией. Изменения отменены.')
+                db.execute('UPDATE redeem_codes SET active=1 WHERE digest=?',(digest,))
+            else:
+                db.execute("INSERT INTO redeem_codes(digest,task,batch,created,max_uses) VALUES(?,'*',?,?,20)",(digest,row['batch'],int(time.time())))
+    print('10 партнёрских слов зарегистрированы. Расход и балансы сохранены.')
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     sub=parser.add_subparsers(dest='action',required=True)
@@ -103,12 +122,14 @@ def main():
     g=sub.add_parser('pool');g.add_argument('--output',required=True)
     g=sub.add_parser('import-pool');g.add_argument('source')
     g=sub.add_parser('replace-pool');g.add_argument('source')
+    g=sub.add_parser('import-partners');g.add_argument('source')
     sub.add_parser('stats')
     args=parser.parse_args();server.initialize()
     if args.action=='generate':
         generate(args.per_task,args.task or [t['id'] for t in server.catalog()['tasks']],args.output)
     elif args.action=='pool': pool(args.output)
     elif args.action=='import-pool': import_pool(args.source)
+    elif args.action=='import-partners': import_partners(args.source)
     elif args.action=='replace-pool': import_pool(args.source,replace=True)
     else:
         with server.connect() as db:

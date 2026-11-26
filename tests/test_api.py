@@ -195,4 +195,18 @@ class API(unittest.TestCase):
   with sqlite3.connect(pathlib.Path(self.tmp.name)/'progress.sqlite3') as db:
    self.assertEqual(db.execute('SELECT max_uses FROM redeem_codes WHERE digest=?',(hashlib.sha256(self.code.casefold().encode()).hexdigest(),)).fetchone()[0],5)
   self.assertEqual(self.request('state',cookie=cookies[0])[1]['balance'],1)
+ def test_partner_words_twenty_uses_and_repeat_import(self):
+  import csv
+  path=pathlib.Path(self.tmp.name)/'partners.csv'
+  rows=[{'code':'PARTNER-'+str(i),'max_uses':20,'batch':'partner-test'} for i in range(10)]
+  with path.open('w',newline='') as f:
+   w=csv.DictWriter(f,fieldnames=list(rows[0]));w.writeheader();w.writerows(rows)
+  cmd=['python3','tools/manage_codes.py','import-partners',str(path)]
+  result=subprocess.run(cmd,cwd=ROOT,env=self.env,capture_output=True);self.assertEqual(result.returncode,0,result.stderr)
+  cookies=[self.new_cookie() for _ in range(21)]
+  for cookie in cookies[:20]:self.assertEqual(self.request('redeem',{'code':'PARTNER-0'},cookie=cookie)[0],200)
+  self.assertEqual(self.request('redeem',{'code':'PARTNER-0'},cookie=cookies[20])[0],409)
+  result=subprocess.run(cmd,cwd=ROOT,env=self.env,capture_output=True);self.assertEqual(result.returncode,0,result.stderr)
+  self.assertEqual(self.request('redeem',{'code':'PARTNER-0'},cookie=cookies[20])[0],409)
+  self.assertEqual(self.request('state',cookie=cookies[0])[1]['balance'],1)
 if __name__=='__main__':unittest.main()

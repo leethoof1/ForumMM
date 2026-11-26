@@ -7,6 +7,8 @@ CSV=${2:-/var/lib/forummm/forum-words.csv}
 if [[ -z ${2:-} && ! -f $CSV ]]; then CSV=/var/lib/forummm/forum-codes.csv; fi
 MODE=${3:-import}
 RESET=${4:-}
+PARTNERS=${5:-}
+if [[ -n $PARTNERS && ! -f $PARTNERS ]]; then echo "Не найден файл партнёров: $PARTNERS"; exit 1; fi
 [[ -z $RESET || $RESET == reset ]] || { echo 'Четвёртый аргумент: reset или пусто'; exit 1; }
 [[ $MODE == import || $MODE == replace ]] || { echo 'Режим: import или replace'; exit 1; }
 DEST=/var/lib/forummm/forum-codes.csv
@@ -60,6 +62,18 @@ if [[ $(readlink -f "$CSV") != "$DEST" ]]; then
     fi
 fi
 runuser -u forummm -- env FORUM_STATE_DIR=/var/lib/forummm python3 "$APP/tools/manage_codes.py" "$COMMAND" "$DEST"
+# A supplementary private batch is imported after the main pool, without consuming uses.
+PARTNER_DEST=/var/lib/forummm/partner-words.csv
+if [[ -n $PARTNERS && $(readlink -f "$PARTNERS") != "$PARTNER_DEST" ]]; then
+    if [[ -f $PARTNER_DEST ]]; then
+        cmp "$PARTNERS" "$PARTNER_DEST" || { echo 'Другая партия партнёров уже существует; нужна ручная проверка.'; false; }
+    else
+        install -o forummm -g forummm -m 600 "$PARTNERS" "$PARTNER_DEST"
+    fi
+fi
+if [[ -f $PARTNER_DEST ]]; then
+    runuser -u forummm -- env FORUM_STATE_DIR=/var/lib/forummm python3 "$APP/tools/manage_codes.py" import-partners "$PARTNER_DEST"
+fi
 # The loopback backend trusts X-Real-IP only from local nginx.
 grep -Eq 'proxy_set_header[[:space:]]+X-Real-IP[[:space:]]+\$remote_addr;' /etc/nginx/sites-available/forummm || { echo 'Нужен X-Real-IP от nginx'; false; }
 install -d -m 755 /etc/systemd/system/forummm.service.d
