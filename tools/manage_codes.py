@@ -97,12 +97,18 @@ def import_pool(source, replace=False):
 
 def import_partners(source):
     with Path(source).open(encoding='utf-8-sig') as f:rows=list(csv.DictReader(f))
-    if len(rows)!=10 or len({server.code_digest(r['code']) for r in rows})!=10:
-        raise ValueError('Ожидаются 10 уникальных партнёрских слов')
+    if len(rows) not in [10,30] or len({server.code_digest(r['code']) for r in rows})!=len(rows):
+        raise ValueError('Ожидаются 30 уникальных партнёрских слов (старые файлы из 10 поддерживаются)')
     if len({r['batch'] for r in rows})!=1 or any(int(r['max_uses'])!=20 or not r['code'].strip() or len(r['code'])>100 for r in rows):
-        raise ValueError('Все 10 слов должны быть одной партией с лимитом 20')
+        raise ValueError('Все слова должны быть одной партией с лимитом 20')
+    if len(rows)==30:
+        from collections import Counter
+        if sorted(Counter(r.get('location','') for r in rows).values())!=[10,10,10]:
+            raise ValueError('Нужно по 10 слов для трёх партнёров')
     with server.connect() as db:
         db.execute('BEGIN IMMEDIATE')
+        if len(rows)==10 and db.execute('SELECT count(*) FROM redeem_codes WHERE batch=?',(rows[0]['batch'],)).fetchone()[0]>10:
+            raise ValueError('Нельзя загрузить старый файл 10 поверх партии из 30')
         for row in rows:
             digest=server.code_digest(row['code'])
             old=db.execute('SELECT * FROM redeem_codes WHERE digest=?',(digest,)).fetchone()
@@ -112,7 +118,10 @@ def import_partners(source):
                 db.execute('UPDATE redeem_codes SET active=1 WHERE digest=?',(digest,))
             else:
                 db.execute("INSERT INTO redeem_codes(digest,task,batch,created,max_uses) VALUES(?,'*',?,?,20)",(digest,row['batch'],int(time.time())))
-    print('10 партнёрских слов зарегистрированы. Расход и балансы сохранены.')
+        if len(rows)==30:
+            digests=[server.code_digest(r['code']) for r in rows]
+            db.execute('UPDATE redeem_codes SET active=0 WHERE batch=? AND digest NOT IN ('+','.join('?' for _ in digests)+')',[rows[0]['batch'],*digests])
+    print(f'{len(rows)} партнёрских слов зарегистрированы. Расход и балансы сохранены.')
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)

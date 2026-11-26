@@ -209,4 +209,22 @@ class API(unittest.TestCase):
   result=subprocess.run(cmd,cwd=ROOT,env=self.env,capture_output=True);self.assertEqual(result.returncode,0,result.stderr)
   self.assertEqual(self.request('redeem',{'code':'PARTNER-0'},cookie=cookies[20])[0],409)
   self.assertEqual(self.request('state',cookie=cookies[0])[1]['balance'],1)
+ def test_upgrade_partner_batch_from_ten_to_thirty(self):
+  import csv
+  batch='upgrade-'+os.urandom(5).hex()
+  oldpath=pathlib.Path(self.tmp.name)/'partners-old.csv';newpath=pathlib.Path(self.tmp.name)/'partners-30.csv'
+  oldrows=[dict(code=batch+'-'+str(i),max_uses=20,batch=batch,location='old') for i in range(10)]
+  newrows=[dict(code=batch+'-'+str(i),max_uses=20,batch=batch,location='partner-'+str(j//10)) for j,i in enumerate([*range(9),*range(10,31)])]
+  for path,rows in [(oldpath,oldrows),(newpath,newrows)]:
+   with path.open('w',newline='') as f:
+    w=csv.DictWriter(f,fieldnames=list(rows[0]));w.writeheader();w.writerows(rows)
+  def run(path):return subprocess.run(['python3','tools/manage_codes.py','import-partners',str(path)],cwd=ROOT,env=self.env,capture_output=True)
+  self.assertEqual(run(oldpath).returncode,0)
+  self.assertEqual(self.request('redeem',{'code':oldrows[0]['code']})[1]['balance'],1)
+  for _ in range(2):self.assertEqual(run(newpath).returncode,0)
+  self.assertEqual(self.request('redeem',{'code':oldrows[0]['code']})[1]['balance'],1)
+  self.assertEqual(self.request('redeem',{'code':oldrows[9]['code']},cookie=self.new_cookie())[0],400)
+  with sqlite3.connect(pathlib.Path(self.tmp.name)/'progress.sqlite3') as db:
+   self.assertEqual(db.execute('SELECT count(*) FROM redeem_codes WHERE batch=? AND active=1',(batch,)).fetchone()[0],30)
+  self.assertNotEqual(run(oldpath).returncode,0)
 if __name__=='__main__':unittest.main()

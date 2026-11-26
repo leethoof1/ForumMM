@@ -62,17 +62,18 @@ if [[ $(readlink -f "$CSV") != "$DEST" ]]; then
     fi
 fi
 runuser -u forummm -- env FORUM_STATE_DIR=/var/lib/forummm python3 "$APP/tools/manage_codes.py" "$COMMAND" "$DEST"
-# A supplementary private batch is imported after the main pool, without consuming uses.
+# Validate the staged private file before replacing the earlier partner list.
 PARTNER_DEST=/var/lib/forummm/partner-words.csv
-if [[ -n $PARTNERS && $(readlink -f "$PARTNERS") != "$PARTNER_DEST" ]]; then
-    if [[ -f $PARTNER_DEST ]]; then
-        cmp "$PARTNERS" "$PARTNER_DEST" || { echo 'Другая партия партнёров уже существует; нужна ручная проверка.'; false; }
-    else
-        install -o forummm -g forummm -m 600 "$PARTNERS" "$PARTNER_DEST"
+PARTNER_SOURCE=${PARTNERS:-$PARTNER_DEST}
+if [[ -f $PARTNER_SOURCE ]]; then
+    PARTNER_STAGE=/var/lib/forummm/.partner-import-$$.csv
+    install -o forummm -g forummm -m 600 "$PARTNER_SOURCE" "$PARTNER_STAGE"
+    runuser -u forummm -- env FORUM_STATE_DIR=/var/lib/forummm python3 "$APP/tools/manage_codes.py" import-partners "$PARTNER_STAGE"
+    if [[ -f $PARTNER_DEST ]] && ! cmp -s "$PARTNER_SOURCE" "$PARTNER_DEST"; then
+        cp -p "$PARTNER_DEST" "$PARTNER_DEST.before-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     fi
-fi
-if [[ -f $PARTNER_DEST ]]; then
-    runuser -u forummm -- env FORUM_STATE_DIR=/var/lib/forummm python3 "$APP/tools/manage_codes.py" import-partners "$PARTNER_DEST"
+    install -o forummm -g forummm -m 600 "$PARTNER_STAGE" "$PARTNER_DEST"
+    rm "$PARTNER_STAGE"
 fi
 # The loopback backend trusts X-Real-IP only from local nginx.
 grep -Eq 'proxy_set_header[[:space:]]+X-Real-IP[[:space:]]+\$remote_addr;' /etc/nginx/sites-available/forummm || { echo 'Нужен X-Real-IP от nginx'; false; }
