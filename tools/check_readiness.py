@@ -5,14 +5,15 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def validate_state(data):
     assert len(data['data']['venues'])==6
-    assert data['data']['products'][0]['id']=='kit'
-    stock=data['shop']['kit']['stock']
-    # Both release stages are legitimate. Do not roll back a healthy 500-item release!
-    assert stock['total'] in (500,700)
-    assert stock['total']==stock['released']
-    assert 0<=stock['available']<=stock['total']
-    assert 0<=stock['remaining']<=stock['total']
-    assert 'upcoming' not in stock and 'release_at' not in stock
+    products=data['data']['products']
+    assert products
+    for product in products:
+        stock=data['shop'][product['id']]['stock']
+        assert stock['total'] in (500,700)
+        assert stock['total']==stock['released']
+        assert 0<=stock['available']<=stock['total']
+        assert 0<=stock['remaining']<=stock['total']
+        assert 'upcoming' not in stock and 'release_at' not in stock
 
 def check(base='http://127.0.0.1:8090'):
     opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -20,7 +21,9 @@ def check(base='http://127.0.0.1:8090'):
         with opener.open(base+path,timeout=4) as response:return response.read()
     expected=hashlib.sha256((ROOT/'server.py').read_bytes()+(ROOT/'polls.py').read_bytes()).hexdigest()
     health=json.loads(get('/api/health'));assert health['build']==expected,'Запущена другая версия сервера'
-    validate_state(json.loads(get('/api/state')))
+    data=json.loads(get('/api/state'));validate_state(data)
+    local=json.loads((ROOT/'data.json').read_text())
+    assert [(p['id'],p['price']) for p in data['data']['products']]==[(p['id'],p['price']) for p in local['products']], 'Каталог не соответствует версии'
     for filename in ['app.js','poll.js','style.css']:
         assert get('/'+filename)==(ROOT/'public'/filename).read_bytes(),'Отдаётся старый файл интерфейса: '+filename
     for path,role in [('/vote','vote'),('/results','results'),('/control','control')]:

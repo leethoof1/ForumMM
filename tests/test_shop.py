@@ -6,7 +6,8 @@ class Shop(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
   cls.tmp=tempfile.TemporaryDirectory();cls.state=pathlib.Path(cls.tmp.name)
-  data=json.loads((ROOT/'data.json').read_text());cls.product=data['products'][0]
+  data=json.loads((ROOT/'data.json').read_text());cls.product=dict(id='kit',name='Набор',price=10)
+  data['products']=[cls.product]
   cls.product['stock']={'total':3,'initial':2,'release_at':'2030-11-27T14:30:00+03:00'}
   cls.path=cls.state/'catalog.json';cls.path.write_text(json.dumps(data))
   cls.env={**os.environ,'FORUM_STATE_DIR':cls.tmp.name,'FORUM_SECURE_COOKIE':'0','FORUM_IP_GUARD':'1','FORUM_TRUST_PROXY':'1','FORUM_CATALOG_PATH':str(cls.path)}

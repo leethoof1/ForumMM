@@ -399,16 +399,49 @@
   ],
   "products": [
     {
-      "id": "kit",
-      "name": "Набор участника форума",
-      "description": "Шоппер, блокнот и ручка",
-      "price": 10,
-      "icon": "▱",
+      "id": "pen",
+      "name": "Ручка",
+      "price": 2,
+      "icon": "✎",
+      "description": "Ручка участника форума",
       "stock": {
         "total": 700,
         "initial": 500,
         "release_at": "2026-11-27T14:00:00+03:00"
-      }
+      },
+      "legacy_products": [
+        "kit"
+      ]
+    },
+    {
+      "id": "notebook",
+      "name": "Блокнот",
+      "price": 4,
+      "icon": "▤",
+      "description": "Блокнот участника форума",
+      "stock": {
+        "total": 700,
+        "initial": 500,
+        "release_at": "2026-11-27T14:00:00+03:00"
+      },
+      "legacy_products": [
+        "kit"
+      ]
+    },
+    {
+      "id": "bag",
+      "name": "Шоппер",
+      "price": 6,
+      "icon": "▱",
+      "description": "Шоппер участника форума",
+      "stock": {
+        "total": 700,
+        "initial": 500,
+        "release_at": "2026-11-27T14:00:00+03:00"
+      },
+      "legacy_products": [
+        "kit"
+      ]
     }
   ]
 }

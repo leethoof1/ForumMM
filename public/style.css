@@ -20,3 +20,5 @@
 @media(max-width:650px){.poll-comparison{padding:18px 14px}.poll-legends{gap:14px}.poll-side h2{font-size:17px;min-height:5.2em}.poll-score{min-height:82px;gap:6px;flex-wrap:wrap}.poll-score .poll-count{font-size:48px}.poll-percent{font-size:22px}.poll-shared-bar{height:64px}.poll-side-blue .poll-score{justify-content:flex-end}}
 
 .poll-score .poll-count{min-width:4ch}.poll-percent{min-width:5.2ch}@media(max-width:650px){.poll-score{flex-direction:column;align-items:flex-start;justify-content:flex-start;min-height:104px;gap:0}.poll-side-blue .poll-score{align-items:flex-end;justify-content:flex-start}.poll-score .poll-count{min-width:0}}
+
+.productgrid{grid-template-columns:repeat(3,minmax(0,1fr));align-items:start}.product .art span{font-size:90px}.product .art{height:150px}@media(max-width:650px){.productgrid{grid-template-columns:1fr}.product .art{height:125px}}

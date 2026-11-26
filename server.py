@@ -19,7 +19,8 @@ def catalog():
 
 def public_catalog():
     data=catalog()
-    for product in data['products']: product.pop('stock',None)
+    for product in data['products']:
+        product.pop('stock',None);product.pop('legacy_products',None)
     return data
 
 def connect():
@@ -95,6 +96,14 @@ def code_digest(code):
 def ip_guard():
     return os.environ.get('FORUM_IP_GUARD','1')=='1'
 
+def product_ids(product):
+    return list(dict.fromkeys([product['id'],*product.get('legacy_products',[])]))
+
+def claimed(db,table,identity,product):
+    column={'session_products':'session','ip_products':'ip'}[table]
+    ids=product_ids(product)
+    return bool(db.execute('SELECT 1 FROM '+table+' WHERE '+column+'=? AND product IN ('+','.join('?' for _ in ids)+')',[identity,*ids]).fetchone())
+
 def inventory(db,product,now=None):
     config=product.get('stock')
     if not config:return None
@@ -102,7 +111,8 @@ def inventory(db,product,now=None):
     total=int(config['total']);initial=int(config['initial'])
     release=datetime.fromisoformat(config['release_at'])
     cap=total if now>=release else initial
-    row=db.execute('SELECT count(*),sum(fulfilled_at IS NOT NULL) FROM exchanges WHERE product=?',(product['id'],)).fetchone()
+    ids=product_ids(product)
+    row=db.execute('SELECT count(*),sum(fulfilled_at IS NOT NULL) FROM exchanges WHERE product IN ('+','.join('?' for _ in ids)+')',ids).fetchone()
     allocated=row[0];issued=row[1] or 0
     return dict(total=cap,released=cap,available=max(0,cap-allocated),reserved=allocated-issued,
                 issued=issued,remaining=max(0,cap-issued))
@@ -110,8 +120,8 @@ def inventory(db,product,now=None):
 def shop_data(db,sid,ip):
     result={}
     for p in catalog()['products']:
-        bought=db.execute('SELECT 1 FROM session_products WHERE session=? AND product=?',(sid,p['id'])).fetchone()
-        blocked=ip_guard() and db.execute('SELECT 1 FROM ip_products WHERE ip=? AND product=?',(ip,p['id'])).fetchone()
+        bought=claimed(db,'session_products',sid,p)
+        blocked=ip_guard() and claimed(db,'ip_products',ip,p)
         result[p['id']]=dict(purchased=bool(bought or blocked),stock=inventory(db,p))
     return result
 
@@ -268,15 +278,15 @@ class Handler(BaseHTTPRequestHandler):
                 elif previous:
                     if previous['product']!=body.get('product'): error='Этот запрос уже использован'; status=409
                 elif not product: error='Товар не найден'; status=404
-                elif db.execute('SELECT 1 FROM session_products WHERE session=? AND product=?',(sid,product['id'])).fetchone():
+                elif claimed(db,'session_products',sid,product):
                     error='Ты уже обменял баллы на этот товар. Повторный обмен недоступен.';status=409
-                elif ip_guard() and db.execute('SELECT 1 FROM ip_products WHERE ip=? AND product=?',(ip,product['id'])).fetchone():
+                elif ip_guard() and claimed(db,'ip_products',ip,product):
                     error='С этого IP-адреса этот товар уже приобретали.';status=409
                 else:
                     balance=progress(db,sid)['balance']
                     stock=inventory(db,product)
                     if stock and stock['available']<=0:
-                        error='Доступные сейчас наборы закончились.';status=409
+                        error='Этот товар сейчас закончился.';status=409
                     elif balance<product['price']: error=f"Нужно ещё {product['price']-balance} балл(ов)"; status=409
                     else:
                         db.execute('INSERT INTO session_products VALUES(?,?)',(sid,product['id']))
