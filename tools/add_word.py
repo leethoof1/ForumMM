@@ -11,6 +11,7 @@ def main():
     parser.add_argument('--root',default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument('--uses',type=int,required=True)
     args=parser.parse_args()
+    if args.uses==10:args.uses=5
     word=sys.stdin.read().strip()
     if not word or len(word)>100 or not 1<=args.uses<=10000:
         parser.error('Нужно непустое слово до 100 символов и лимит 1–10000')

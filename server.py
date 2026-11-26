@@ -49,6 +49,7 @@ def initialize():
         columns={r['name'] for r in db.execute('PRAGMA table_info(redeem_codes)')}
         if 'max_uses' not in columns:
             db.execute('ALTER TABLE redeem_codes ADD COLUMN max_uses INTEGER NOT NULL DEFAULT 1 CHECK(max_uses>0)')
+        db.execute('UPDATE redeem_codes SET max_uses=5 WHERE max_uses=10')
         if 'active' not in columns:
             db.execute('ALTER TABLE redeem_codes ADD COLUMN active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1))')
         db.execute("""CREATE TABLE IF NOT EXISTS code_uses(
@@ -229,7 +230,7 @@ class Handler(BaseHTTPRequestHandler):
                     if ip_guard():db.execute('INSERT OR IGNORE INTO ip_codes VALUES(?,?,?,?)',(ip,record['digest'],sid,now))
                 elif ip_guard() and db.execute('SELECT 1 FROM ip_codes WHERE ip=? AND digest=?',(ip,record['digest'])).fetchone():
                     error='С этого IP-адреса этот код уже применяли.';status=409
-                elif db.execute('SELECT count(*) FROM code_uses WHERE digest=?',(record['digest'],)).fetchone()[0]>=record['max_uses']:
+                elif db.execute('SELECT count(*) FROM code_uses WHERE digest=?',(record['digest'],)).fetchone()[0]>=(5 if record['max_uses']==10 else record['max_uses']):
                     error='Лимит использований этого кода исчерпан.';status=409
                 else:
                     if ip_guard():db.execute('INSERT INTO ip_codes VALUES(?,?,?,?)',(ip,record['digest'],sid,now))

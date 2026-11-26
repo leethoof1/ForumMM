@@ -123,7 +123,7 @@ class API(unittest.TestCase):
   result=subprocess.run(['python3','tools/manage_codes.py','pool','--output',str(out)],cwd=ROOT,env=self.env,capture_output=True)
   self.assertEqual(result.returncode,0,result.stderr)
   with out.open(encoding='utf-8-sig') as f: rows=list(csv.DictReader(f))
-  self.assertEqual(collections.Counter(int(r['max_uses']) for r in rows),{600:5,100:15,10:80})
+  self.assertEqual(collections.Counter(int(r['max_uses']) for r in rows),{600:5,100:15,5:80})
   self.assertEqual(len({r['code'] for r in rows}),100)
   self.request('redeem',{'code':rows[0]['code']})
   for _ in range(2):
@@ -185,4 +185,14 @@ class API(unittest.TestCase):
   import importlib.util
   spec=importlib.util.spec_from_file_location('forum_server',ROOT/'server.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
   self.assertEqual(module.code_digest('  УЧЁБА '),module.code_digest('учеба'))
+ def test_lower_ten_use_limit_preserves_consumption_and_balance(self):
+  with sqlite3.connect(pathlib.Path(self.tmp.name)/'progress.sqlite3') as db:
+   db.execute("UPDATE redeem_codes SET task='*',max_uses=10 WHERE digest=?",(hashlib.sha256(self.code.casefold().encode()).hexdigest(),))
+  cookies=[self.new_cookie() for _ in range(6)]
+  for cookie in cookies[:5]:self.assertEqual(self.request('redeem',{'code':self.code},cookie=cookie)[0],200)
+  self.assertEqual(self.request('redeem',{'code':self.code},cookie=cookies[5])[0],409)
+  self.proc.terminate();self.proc.wait();type(self).start_server()
+  with sqlite3.connect(pathlib.Path(self.tmp.name)/'progress.sqlite3') as db:
+   self.assertEqual(db.execute('SELECT max_uses FROM redeem_codes WHERE digest=?',(hashlib.sha256(self.code.casefold().encode()).hexdigest(),)).fetchone()[0],5)
+  self.assertEqual(self.request('state',cookie=cookies[0])[1]['balance'],1)
 if __name__=='__main__':unittest.main()

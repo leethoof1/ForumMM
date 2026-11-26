@@ -60,7 +60,7 @@ def pool(output):
             with os.fdopen(fd,'w',encoding='utf-8-sig',newline='') as f:
                 w=csv.writer(f);w.writerow(['number','code','max_uses','batch'])
                 i=0
-                for amount,limit in [(5,600),(15,100),(80,10)]:
+                for amount,limit in [(5,600),(15,100),(80,5)]:
                     for _ in range(amount):
                         i+=1;code='MM-'+secrets.token_hex(8).upper()
                         db.execute("INSERT INTO redeem_codes(digest,task,batch,created,max_uses) VALUES(?,'*',?,?,?)",(server.code_digest(code),batch,int(time.time()),limit))
@@ -69,7 +69,7 @@ def pool(output):
             db.commit()
         except BaseException:
             db.rollback();output.unlink(missing_ok=True);raise
-    print(f'Партия {batch}: 100 кодов, 5300 начислений. CSV: {output}')
+    print(f'Партия {batch}: 100 кодов, 4900 начислений. CSV: {output}')
 
 def import_pool(source, replace=False):
     with Path(source).open(encoding='utf-8-sig') as f: rows=list(csv.DictReader(f))
@@ -78,16 +78,18 @@ def import_pool(source, replace=False):
     if len({r['batch'] for r in rows})!=1 or any(not r['code'].strip() or len(r['code'])>100 for r in rows):
         raise ValueError('Ожидается одна партия с непустыми кодами до 100 символов')
     from collections import Counter
-    if Counter(int(r['max_uses']) for r in rows)!={600:5,100:15,10:80}:
-        raise ValueError('Ожидаются лимиты: 5×600, 15×100, 80×10')
+    counts=Counter(int(r['max_uses']) for r in rows)
+    if counts not in [{600:5,100:15,10:80},{600:5,100:15,5:80}]:
+        raise ValueError('Ожидаются лимиты: 5×600, 15×100, 80×5 (или старый CSV 80×10)')
     with server.connect() as db:
         db.execute('BEGIN IMMEDIATE')
         for r in rows:
+            limit=5 if int(r['max_uses'])==10 else int(r['max_uses'])
             digest=server.code_digest(r['code']);old=db.execute('SELECT * FROM redeem_codes WHERE digest=?',(digest,)).fetchone()
             if old:
-                if old['task']!='*' or old['batch']!=r['batch'] or old['max_uses']!=int(r['max_uses']):
+                if old['task']!='*' or old['batch']!=r['batch'] or old['max_uses']!=limit:
                     raise ValueError('Конфликт кода с существующей партией')
-            else: db.execute("INSERT INTO redeem_codes(digest,task,batch,created,max_uses) VALUES(?,'*',?,?,?)",(digest,r['batch'],int(time.time()),int(r['max_uses'])))
+            else: db.execute("INSERT INTO redeem_codes(digest,task,batch,created,max_uses) VALUES(?,'*',?,?,?)",(digest,r['batch'],int(time.time()),limit))
         if replace:
             db.execute("UPDATE redeem_codes SET active=0 WHERE batch<>?",(rows[0]['batch'],))
             db.execute("UPDATE redeem_codes SET active=1 WHERE task='*' AND batch=?",(rows[0]['batch'],))
