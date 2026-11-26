@@ -37,6 +37,9 @@ rollback() {
     git -C "$APP" checkout --detach "$OLD"
     if [[ -n ${POLL_PROXY_BACKUP:-} && -f $POLL_PROXY_BACKUP ]]; then
         cp -p "$POLL_PROXY_BACKUP" /etc/nginx/sites-available/forummm
+    fi
+    if [[ -n ${GLOBAL_NGINX_BACKUP:-} && -f $GLOBAL_NGINX_BACKUP ]]; then
+        cp -p "$GLOBAL_NGINX_BACKUP" /etc/nginx/nginx.conf
         nginx -t && systemctl reload nginx
     fi
     # start is a no-op if the failed new build is already running; restart is required.
@@ -88,10 +91,30 @@ fi
 POLL_PROXY_BACKUP=/etc/nginx/sites-available/forummm.before-poll-$(date -u +%Y%m%dT%H%M%SZ)-$$
 cp -p /etc/nginx/sites-available/forummm "$POLL_PROXY_BACKUP"
 python3 "$APP/tools/configure_poll_proxy.py" /etc/nginx/sites-available/forummm
-if ! nginx -t; then cp -p "$POLL_PROXY_BACKUP" /etc/nginx/sites-available/forummm; false; fi
+GLOBAL_NGINX_BACKUP=/etc/nginx/nginx.conf.before-capacity-$(date -u +%Y%m%dT%H%M%SZ)-$$
+cp -p /etc/nginx/nginx.conf "$GLOBAL_NGINX_BACKUP"
+python3 "$APP/tools/configure_capacity.py" /etc/nginx/sites-available/forummm /etc/nginx/nginx.conf
+# Nginx serves only these whitelisted public files; no checkout or private-state root.
+chmod 755 "$APP" "$APP/public"
+chmod 644 "$APP/public/"*.js "$APP/public/"*.css "$APP/public/"*.svg
+NGINX_RESTART=0
+ensure_fds() {
+    local name=$1 minimum=$2 soft hard
+    soft=$(systemctl show "$name" --property=LimitNOFILESoft --value)
+    hard=$(systemctl show "$name" --property=LimitNOFILE --value)
+    if [[ $soft =~ ^[0-9]+$ && $hard =~ ^[0-9]+$ ]] && ((soft<minimum)); then
+        if ((hard<minimum)); then hard=$minimum; fi
+        install -d -m 755 "/etc/systemd/system/$name.service.d"
+        printf '[Service]\nLimitNOFILE=%s:%s\n' "$minimum" "$hard" > "/etc/systemd/system/$name.service.d/capacity.conf"
+        if [[ $name == nginx ]]; then NGINX_RESTART=1; fi
+    fi
+}
+ensure_fds forummm 8192
+ensure_fds nginx 16384
+nginx -t
 systemctl daemon-reload
 systemctl start forummm
-systemctl reload nginx
+if [[ $NGINX_RESTART == 1 ]]; then systemctl restart nginx; else systemctl reload nginx; fi
 python3 "$APP/tools/check_readiness.py"
 trap - ERR
 echo "Обновлено. Бэкап БД: $BACKUP"

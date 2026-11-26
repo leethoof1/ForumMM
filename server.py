@@ -65,6 +65,8 @@ def initialize():
         for row in db.execute('SELECT rowid FROM exchanges WHERE receipt IS NULL').fetchall():
             db.execute('UPDATE exchanges SET receipt=? WHERE rowid=?',(secrets.token_hex(8).upper(),row['rowid']))
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS exchange_receipt ON exchanges(receipt)')
+        db.execute('CREATE INDEX IF NOT EXISTS exchange_stock ON exchanges(product,fulfilled_at)')
+        db.execute('CREATE INDEX IF NOT EXISTS code_uses_session ON code_uses(session)')
         db.execute('INSERT OR IGNORE INTO session_products SELECT session,product FROM exchanges')
     keyfile=STATE/'staff-key.txt'
     if not keyfile.exists():
