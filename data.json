@@ -431,7 +431,7 @@
     {
       "id": "bag",
       "name": "Шоппер",
-      "price": 12,
+      "price": 10,
       "icon": "▱",
       "description": "Шоппер участника форума",
       "stock": {
