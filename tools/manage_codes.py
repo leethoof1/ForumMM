@@ -85,7 +85,9 @@ def import_pool(source, replace=False):
         db.execute('BEGIN IMMEDIATE')
         for r in rows:
             limit=5 if int(r['max_uses'])==10 else int(r['max_uses'])
-            digest=server.code_digest(r['code']);old=db.execute('SELECT * FROM redeem_codes WHERE digest=?',(digest,)).fetchone()
+            digest=server.code_digest(r['code'])
+            if digest in {server.code_digest(word) for word in server.FIRST_MOVEMENT_WORDS}:limit=50
+            old=db.execute('SELECT * FROM redeem_codes WHERE digest=?',(digest,)).fetchone()
             if old:
                 if old['task']!='*' or old['batch']!=r['batch'] or old['max_uses']!=limit:
                     raise ValueError('Конфликт кода с существующей партией')

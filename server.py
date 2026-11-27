@@ -14,6 +14,8 @@ STATE = Path(os.environ.get('FORUM_STATE_DIR', str(Path.home()/'.local/share/for
 
 BUILD_ID=hashlib.sha256(Path(__file__).read_bytes()+(ROOT/'polls.py').read_bytes()).hexdigest()
 
+FIRST_MOVEMENT_WORDS = ('ПЕРВЫЕ','ДЕЙСТВИЕ','ИНИЦИАТИВА','ПРОЕКТ','ЛИДЕР','МЕЧТА','СОДРУЖЕСТВО','ВОЗМОЖНОСТЬ')
+
 def catalog():
     return json.loads(Path(os.environ.get('FORUM_CATALOG_PATH',str(ROOT/'data.json'))).read_text())
 
@@ -51,6 +53,8 @@ def initialize():
         if 'max_uses' not in columns:
             db.execute('ALTER TABLE redeem_codes ADD COLUMN max_uses INTEGER NOT NULL DEFAULT 1 CHECK(max_uses>0)')
         db.execute('UPDATE redeem_codes SET max_uses=5 WHERE max_uses=10')
+        for word in FIRST_MOVEMENT_WORDS:
+            db.execute("UPDATE redeem_codes SET max_uses=50 WHERE digest=? AND task='*'",(code_digest(word),))
         if 'active' not in columns:
             db.execute('ALTER TABLE redeem_codes ADD COLUMN active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1))')
         db.execute("""CREATE TABLE IF NOT EXISTS code_uses(
