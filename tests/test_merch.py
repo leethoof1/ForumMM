@@ -35,11 +35,11 @@ class Merch(unittest.TestCase):
    db.execute("INSERT INTO session_products VALUES(?,'kit')",(sid,))
  def test_three_items_prices_independent_claims_and_fulfillment(self):
   c=self.client('198.51.100.111');d=self.req(c)[1]
-  self.assertEqual([(p['id'],p['price']) for p in d['data']['products']],[('pen',3),('notebook',5),('bag',10)])
+  self.assertEqual([(p['id'],p['price']) for p in d['data']['products']],[('pen',3),('notebook',5),('bag',12)])
   for p in ['pen','notebook','bag']:
    self.assertEqual(self.buy(c,p,'buy-'+p+'-first')[0],200)
    self.assertEqual(self.buy(c,p,'buy-'+p+'-second')[0],409)
-  d=self.req(c)[1];self.assertEqual(d['balance'],2)
+  d=self.req(c)[1];self.assertEqual(d['balance'],0)
   other=self.client(c[0]);self.assertTrue(all(x['purchased'] for x in self.req(other)[1]['shop'].values()))
   self.assertEqual(self.buy(other,'pen','new-browser')[0],409)
   receipt=next(h['receipt'] for h in d['history'] if h['product']=='pen');key=(self.state/'delivery-code.txt').read_text()
